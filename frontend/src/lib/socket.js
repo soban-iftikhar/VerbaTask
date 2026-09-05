@@ -1,7 +1,7 @@
 import { io } from 'socket.io-client';
 import { useAuthStore } from './store';
 
-const SOCKET_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'https://verbatask.railway.internal';
+const SOCKET_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'https://verbatask-production.up.railway.app';
 
 // A singleton socket instance
 export const socket = io(SOCKET_URL, {
