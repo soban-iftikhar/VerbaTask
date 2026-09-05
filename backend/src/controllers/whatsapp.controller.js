@@ -39,7 +39,7 @@ import {
  * router for onboarded merchants. Acknowledges Meta immediately and does
  * all real work after, so slow AI calls never trigger Meta's retry storm.
  */
-const SIGNUP_BASE_URL = process.env.SIGNUP_BASE_URL || 'http://localhost:3000/signup';
+const SIGNUP_BASE_URL = process.env.SIGNUP_BASE_URL || 'https://verbatask.netlify.app/signup';
 
 /**
  * Safe WhatsApp reply helper — never lets a failed outbound send crash the
