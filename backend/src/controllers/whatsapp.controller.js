@@ -644,7 +644,7 @@ async function sendItemPickerPage(merchant, page) {
 
 // Escape-hatch words for the guided flow. Prefixes catch typos like "cancelll"
 // — "sto" alone is skipped so words like "stock" never trigger a cancel.
-const CANCEL_WORDS = ['cancel', 'stop', 'quit', 'exit', 'khatam', 'band karo'];
+const CANCEL_WORDS = ['cancel', 'stop', 'quit', 'exit', 'khatam', 'band karo', 'منسوخ', 'ختم'];
 function isCancelText(raw) {
   const s = raw?.trim().toLowerCase();
   if (!s) return false;
@@ -658,12 +658,13 @@ async function continueGuidedOrder(merchant, message, state) {
 
   // Escape hatch — typing "cancel"/"stop" (or near-misses) abandons the
   // in-flight order instead of trapping the merchant in the flow.
-  if (isCancelText(message.text?.body)) {
+  const cancelCandidate = message.text?.body || message.interactive?.button_reply?.title;
+  if (isCancelText(cancelCandidate)) {
     await ConversationState.deleteOne({ _id: state._id });
-    return sendTextMessage(
-      merchant.whatsappNumber,
-      'No problem — order cancelled. Send "order" whenever you want to log another sale.'
-    );
+    const cancelMsg = merchant.language === 'ur'
+      ? 'کوئی مسئلہ نہیں — آرڈر منسوخ کر دیا گیا ہے۔ نیا آرڈر درج کرنے کے لیے "order" لکھیں۔'
+      : 'No problem — order cancelled. Send "order" whenever you want to log another sale.';
+    return sendTextMessage(merchant.whatsappNumber, cancelMsg);
   }
 
   switch (state.step) {
@@ -736,12 +737,36 @@ async function continueGuidedOrder(merchant, message, state) {
     }
 
     case 'awaiting_quantity': {
-      const quantity = parseInt(message.text?.body, 10);
+      // Check if user tapped a payment button or sent a payment method (in case of stale/desynced prompt)
+      const paymentAttempt = buttonId?.startsWith('pay_')
+        ? buttonId.replace('pay_', '')
+        : normalizePaymentMethod(message.text?.body?.trim() || message.interactive?.button_reply?.title?.trim());
+
+      if (paymentAttempt) {
+        if (state.data?.quantity) {
+          state.data = { ...state.data, paymentMethod: paymentAttempt };
+          await state.save();
+          return finalizeGuidedOrder(merchant, state);
+        } else {
+          const prompt = merchant.language === 'ur'
+            ? 'برائے مہربانی پہلے تعداد درج کریں (مثلاً 5 یا 45) یا دوبارہ شروع کرنے کے لیے "cancel" لکھیں۔'
+            : 'Please enter the quantity first (e.g. 5 or 45), or type "cancel" to restart.';
+          return sendTextMessage(merchant.whatsappNumber, prompt);
+        }
+      }
+
+      const raw = message.text?.body?.trim() || message.interactive?.button_reply?.title?.trim();
+      const numMatch = raw?.match(/\d+/);
+      const quantity = numMatch ? parseInt(numMatch[0], 10) : parseInt(raw, 10);
       if (!quantity || quantity <= 0) {
-        return sendTextMessage(merchant.whatsappNumber, 'Please send a valid number.');
+        const errorMsg = merchant.language === 'ur'
+          ? 'برائے مہربانی درست تعداد درج کریں (مثلاً 5 یا 45) یا ختم کرنے کے لیے "cancel" لکھیں۔'
+          : 'Please send a valid number (e.g. 5 or 45). Send "cancel" to restart.';
+        return sendTextMessage(merchant.whatsappNumber, errorMsg);
       }
       state.data = { ...state.data, quantity };
       state.step = 'awaiting_payment_method';
+      await state.save();
       return sendPaymentMethodPicker(merchant);
     }
 
@@ -759,21 +784,27 @@ async function continueGuidedOrder(merchant, message, state) {
       }
 
       if (!paymentMethod) {
-        const typed = message.text?.body?.trim();
+        const typed = message.text?.body?.trim() || message.interactive?.button_reply?.title?.trim();
         const candidate = normalizePaymentMethod(typed);
         if (candidate && allowedMethods.includes(candidate)) {
           paymentMethod = candidate;
+        } else if (typed) {
+          // If merchant replied with 1, 2, 3 corresponding to options
+          const num = parseInt(typed, 10);
+          if (!isNaN(num) && num >= 1 && num <= allowedMethods.length) {
+            paymentMethod = allowedMethods[num - 1];
+          }
         }
       }
 
       if (!paymentMethod) {
         const optionsList = allowedMethods
-          .map((m) => getPaymentMethodDetails(m)?.name || m)
-          .join(', ');
-        return sendTextMessage(
-          merchant.whatsappNumber,
-          `Please choose an accepted payment method: ${optionsList}`
-        );
+          .map((m) => (merchant.language === 'ur' ? getPaymentMethodDetails(m)?.nameUrdu : getPaymentMethodDetails(m)?.name) || m)
+          .join('، ');
+        const prompt = merchant.language === 'ur'
+          ? `برائے مہربانی ادائیگی کا طریقہ منتخب کریں: ${optionsList}`
+          : `Please choose an accepted payment method: ${optionsList}`;
+        return sendTextMessage(merchant.whatsappNumber, prompt);
       }
 
       state.data = { ...state.data, paymentMethod };
