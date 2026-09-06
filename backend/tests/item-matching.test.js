@@ -73,5 +73,45 @@ describe('Cross-Lingual & Spell Correction Item Matching Tests', () => {
     test('matches dal mash with Daal Maash', () => {
       assert.ok(similarity('dal mash', 'Daal Maash') >= 0.85);
     });
+
+    test('matches brand word subsets (e.g. Lipton in Lipton Yellow Label)', () => {
+      assert.ok(similarity('Lipton', 'Lipton Yellow Label') >= 0.85);
+      assert.ok(similarity('لیپٹن', 'Lipton Yellow Label') >= 0.80);
+      assert.ok(similarity('Daal Chana', 'Daal Chana Special') >= 0.85);
+      assert.ok(similarity('چینی', 'Sugar 1kg') >= 0.85);
+    });
+  });
+});
+
+import { extractJson } from '../src/services/qwen.service.js';
+
+describe('Safe LLM JSON Extraction Tests', () => {
+  test('parses clean raw JSON', () => {
+    const res = extractJson('{"type":"log_sale","item":{"name":"rice","quantity":2}}');
+    assert.equal(res?.type, 'log_sale');
+    assert.equal(res?.item?.name, 'rice');
+  });
+
+  test('parses markdown code fences with json tag', () => {
+    const res = extractJson('```json\n{"type":"log_sale","item":{"name":"sugar","quantity":1}}\n```');
+    assert.equal(res?.type, 'log_sale');
+    assert.equal(res?.item?.name, 'sugar');
+  });
+
+  test('parses markdown code fences without language tag', () => {
+    const res = extractJson('```\n{"type":"greeting","rawText":"hello"}\n```');
+    assert.equal(res?.type, 'greeting');
+  });
+
+  test('parses JSON with conversational preambles and trailing commentary', () => {
+    const res = extractJson('Here is the parsed intent:\n{"type":"generate_report","reportType":"sales"}\nHope this helps!');
+    assert.equal(res?.type, 'generate_report');
+    assert.equal(res?.reportType, 'sales');
+  });
+
+  test('returns null for unparseable garbage', () => {
+    assert.equal(extractJson('some non-json text'), null);
+    assert.equal(extractJson(null), null);
+    assert.equal(extractJson(''), null);
   });
 });

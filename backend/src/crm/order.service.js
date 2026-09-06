@@ -21,25 +21,44 @@ const resolveInventoryItem = async (merchantId, lineItem) => {
     return InventoryItem.findOne({ _id: lineItem.inventoryItemId, merchantId });
   }
 
+  const spokenName = (lineItem.name || '').trim();
+  if (!spokenName) return null;
+
   // 1. Exact match (case-insensitive)
   const exact = await InventoryItem.findOne({
     merchantId,
-    name: new RegExp(`^${escapeRegex(lineItem.name)}$`, 'i'),
+    name: new RegExp(`^${escapeRegex(spokenName)}$`, 'i'),
   });
   if (exact) return exact;
 
-  // 2. High-confidence fuzzy & bilingual dictionary match (handles "rice" <-> "چاول", "riece" -> "Rice")
-  const ranked = await findSimilarInventoryItems(merchantId, lineItem.name, { limit: 2, minScore: 0.65 });
-  if (ranked.length === 1 && ranked[0].score >= 0.7) return ranked[0].item;
-  if (ranked.length >= 2 && ranked[0].score >= 0.75 && ranked[0].score - ranked[1].score >= 0.15) {
-    return ranked[0].item;
+  // 2. High-confidence fuzzy & bilingual dictionary match (handles "rice" <-> "چاول", "riece" -> "Rice", "lipton" -> "Lipton Yellow Label")
+  const ranked = await findSimilarInventoryItems(merchantId, spokenName, { limit: 3, minScore: 0.50 });
+  if (ranked.length > 0) {
+    const top = ranked[0];
+    const topNameLower = top.item.name.toLowerCase();
+    const spokenLower = spokenName.toLowerCase();
+
+    // High confidence: score >= 0.80, or full substring containment
+    if (top.score >= 0.80 || topNameLower.includes(spokenLower) || spokenLower.includes(topNameLower)) {
+      return top.item;
+    }
+
+    // Only one candidate and score >= 0.65
+    if (ranked.length === 1 && top.score >= 0.65) {
+      return top.item;
+    }
+
+    // Top candidate clearly beats the second candidate
+    if (ranked.length >= 2 && top.score >= 0.65 && top.score - ranked[1].score >= 0.08) {
+      return top.item;
+    }
   }
 
   // 3. Fallback to LLM semantic matching (handles unique brand variants and complex Urdu/English phrasing)
   try {
     const allItems = await InventoryItem.find({ merchantId }).limit(100);
     if (allItems.length > 0) {
-      const resolvedName = await resolveItemName(lineItem.name, allItems.map((i) => i.name));
+      const resolvedName = await resolveItemName(spokenName, allItems.map((i) => i.name));
       if (resolvedName) {
         const matched = allItems.find((i) => i.name.toLowerCase() === resolvedName.toLowerCase());
         if (matched) return matched;
@@ -49,8 +68,10 @@ const resolveInventoryItem = async (merchantId, lineItem) => {
     console.warn('resolveInventoryItem LLM fallback error:', err.message);
   }
 
-  // 4. Accept single close candidate if score >= 0.55
-  if (ranked.length === 1 && ranked[0].score >= 0.55) return ranked[0].item;
+  // 4. Accept best available candidate if score >= 0.50 (prevents false negatives during presentations)
+  if (ranked.length > 0 && ranked[0].score >= 0.50) {
+    return ranked[0].item;
+  }
 
   return null;
 };

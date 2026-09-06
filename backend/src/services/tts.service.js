@@ -61,8 +61,7 @@ export function getActiveProvider(override = null) {
     dotenv.config();
   }
   if (process.env.TTS_PROVIDER) return process.env.TTS_PROVIDER.toLowerCase();
-  if (process.env.GEMINI_API_KEY) return 'gemini';
-  if (process.env.ELEVENLABS_API_KEY) return 'elevenlabs';
+  // Default to Edge TTS: ultra-fast (~200ms), zero rate limits, authentic Pakistani Urdu (ur-PK-AsadNeural)
   return 'edge';
 }
 
@@ -173,8 +172,8 @@ export async function synthesizeWithGemini(text, language = 'ur', voice = null) 
       ? `Read aloud the following text naturally in authentic Pakistani Urdu. Do not add any greeting or preamble, only read the text:\n\n${text}`
       : `Read aloud the following text clearly and naturally:\n\n${text}`;
 
-  // Try gemini-2.5-flash-preview-tts first, fallback to gemini-2.0-flash
-  const modelsToTry = ['gemini-2.5-flash-preview-tts', 'gemini-2.0-flash'];
+  // Try gemini-2.5-flash-preview-tts
+  const modelsToTry = ['gemini-2.5-flash-preview-tts'];
   let lastError = null;
 
   for (const model of modelsToTry) {

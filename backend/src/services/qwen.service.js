@@ -17,14 +17,17 @@ import { normalizePaymentMethod } from '../constants/paymentMethods.js';
 // Our key is from Model Studio (International), hence the intl default.
 
 const SYSTEM_PROMPT = `You convert a Pakistani merchant's WhatsApp message (which may be in
-English, Urdu, or Roman Urdu) into exactly one JSON object — no prose, no markdown fences,
+English, Urdu script, or Roman Urdu) into exactly one JSON object — no prose, no markdown fences,
 JSON only. Pick ONE of these shapes:
 
 1. Logging a sale:
 {"type":"log_sale","item":{"name":"<item name as the merchant referred to it>","quantity":<number>},"paymentMethod":"cash"|"easypaisa"|"jazzcash"|"sadapay"|"nayapay"|"raast"|"meezan"|"hbl"|"ubl"|"alfalah"|"mcb"|"faysal"|"allied"|"askari"|"bank","amount":<number or null>}
+- CRITICAL: Merchants frequently use extreme shorthand. If the merchant mentions ANY grocery or retail item/product name (e.g. "lipton", "chawal", "daal chana", "2 chini", "ek dudh", "oil", "دو کلو چینی", "لیپٹن چائے", "چاول", "ایک صابن"), it is ALWAYS a sale! Never classify a product name as "unknown".
+- If the merchant mentions multiple items in one sale (e.g. "دو کلو چینی اور ایک لیپٹن چائے"), log the sale using the primary/first item in "item": {"name":"<first item>", "quantity": <num>}.
+- If quantity is not explicitly stated (e.g. "lipton", "chawal"), default quantity to 1.
 - Supported payment methods include Pakistani wallets, EMIs, and banks (cash, easypaisa, jazzcash, sadapay, nayapay, raast, meezan, hbl, ubl, alfalah, mcb, faysal, allied, askari, or generic bank).
 - If paymentMethod is not explicitly stated, ALWAYS default to "cash".
-- If quantity is not explicitly stated, default to 1.
+- If an amount/rupees is mentioned (e.g. "500 rupay", "500 rs", "500"), set amount to that number, otherwise null.
 
 2. Creating an automation:
 {"type":"create_workflow","trigger":"message"|"schedule"|"threshold","condition":{...},"action":{...},"rawInstruction":"<original text>"}
@@ -36,7 +39,7 @@ JSON only. Pick ONE of these shapes:
 {"type":"generate_report","reportType":"inventory"|"sales"|"low_stock"|"top_selling"|"expiring"}
 - Match ANY request in English, Roman Urdu, or Urdu script that asks for a report, list, or summary. Examples: "inventory report", "mujhe inventory bhejo", "sales dikhao", "stock check karna hai".
 
-5. Anything else where an item or action cannot be understood:
+5. Anything else where NO product, report, greeting, or automation can be identified:
 {"type":"unknown","rawText":"<original text>"}`;
 
 const BUSINESS_DETAILS_PROMPT = `You extract business details from a merchant's
@@ -71,27 +74,86 @@ function llmConfigured() {
 }
 
 /**
+ * Safely extracts a JSON object or array from raw LLM output,
+ * stripping markdown code fences, conversational preambles, or trailing text.
+ */
+export function extractJson(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+
+  // 1. Direct JSON parse
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+
+  // 2. Markdown code fences: ```json ... ``` or ``` ... ```
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenceMatch) {
+    try {
+      return JSON.parse(fenceMatch[1].trim());
+    } catch {}
+  }
+
+  // 3. Outermost { ... }
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+    } catch {}
+  }
+
+  // 4. Outermost [ ... ]
+  const firstBracket = trimmed.indexOf('[');
+  const lastBracket = trimmed.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    try {
+      return JSON.parse(trimmed.slice(firstBracket, lastBracket + 1));
+    } catch {}
+  }
+
+  return null;
+}
+
+/**
  * Shared LLM chat call — intent parsing and the onboarding extractors
  * all funnel through here so auth/timeout behaviour lives in one place.
+ * Includes cascading model fallback on Groq to prevent single-point-of-failure errors.
  */
 async function chatCompletion(systemPrompt, userText) {
   if (llmProvider() === 'groq') {
-    const { data } = await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        model: process.env.LLM_MODEL || 'qwen/qwen3.8-27b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userText },
-        ],
-        temperature: 0,
-      },
-      {
-        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-        timeout: 15_000,
+    const modelsToTry = [
+      process.env.LLM_MODEL || 'qwen/qwen3.8-27b',
+      'qwen/qwen3.6-27b',
+      'openai/gpt-oss-120b',
+    ];
+
+    let lastError = null;
+    for (const model of modelsToTry) {
+      try {
+        const { data } = await axios.post(
+          'https://api.groq.com/openai/v1/chat/completions',
+          {
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userText },
+            ],
+            temperature: 0,
+          },
+          {
+            headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+            timeout: 10_000,
+          }
+        );
+        const content = data?.choices?.[0]?.message?.content;
+        if (content) return content;
+      } catch (err) {
+        lastError = err;
+        console.warn(`[qwen.service] Groq model ${model} failed (${err.message}), trying next model...`);
       }
-    );
-    return data?.choices?.[0]?.message?.content ?? '';
+    }
+    throw lastError || new Error('All Groq chat models failed');
   }
 
   const baseUrl = process.env.DASHSCOPE_BASE_URL || 'https://dashscope-intl.aliyuncs.com';
@@ -109,7 +171,7 @@ async function chatCompletion(systemPrompt, userText) {
     },
     {
       headers: { Authorization: `Bearer ${process.env.DASHSCOPE_API_KEY}` },
-      timeout: 15_000,
+      timeout: 12_000,
     }
   );
 
@@ -117,31 +179,58 @@ async function chatCompletion(systemPrompt, userText) {
 }
 
 /**
- * Returns one of the three command-contract shapes above. Shared by the
+ * Returns one of the command-contract shapes. Shared by the
  * typed-text path and (via the agent module) the voice-transcript path, so
  * both inputs converge on identical downstream handling.
  */
 export async function parseIntent(text) {
+  if (!text || typeof text !== 'string') {
+    return { type: 'unknown', rawText: '' };
+  }
+
   if (!llmConfigured()) {
     console.warn('No LLM provider key set — falling back to unknown intent');
     return { type: 'unknown', rawText: text };
   }
 
-  const raw = await chatCompletion(SYSTEM_PROMPT, text);
-
   try {
-    const parsed = JSON.parse(raw);
-    if (!['log_sale', 'create_workflow', 'greeting', 'generate_report', 'unknown'].includes(parsed.type)) {
-      return { type: 'unknown', rawText: text };
+    const raw = await chatCompletion(SYSTEM_PROMPT, text);
+    const parsed = extractJson(raw);
+
+    if (parsed && ['log_sale', 'create_workflow', 'greeting', 'generate_report', 'unknown'].includes(parsed.type)) {
+      if (parsed.type === 'log_sale') {
+        if (parsed.paymentMethod) {
+          parsed.paymentMethod = normalizePaymentMethod(parsed.paymentMethod) || parsed.paymentMethod.toLowerCase();
+        } else {
+          parsed.paymentMethod = 'cash';
+        }
+        if (!parsed.item || !parsed.item.name) {
+          parsed.item = { name: text.trim(), quantity: 1 };
+        }
+        if (!parsed.item.quantity || isNaN(parsed.item.quantity)) {
+          parsed.item.quantity = 1;
+        }
+      }
+      return parsed;
     }
-    if (parsed.type === 'log_sale' && parsed.paymentMethod) {
-      parsed.paymentMethod = normalizePaymentMethod(parsed.paymentMethod) || parsed.paymentMethod.toLowerCase();
-    }
-    return parsed;
-  } catch {
-    console.warn('Qwen returned non-JSON, falling back to unknown:', raw);
-    return { type: 'unknown', rawText: text };
+
+    console.warn('[qwen.service] Model returned non-contract JSON:', raw);
+  } catch (err) {
+    console.warn('[qwen.service] chatCompletion failed during parseIntent:', err.message);
   }
+
+  // Safety net heuristic fallbacks: never falsely say 'unknown' to standard greetings or report requests
+  const lower = text.trim().toLowerCase();
+  if (/^(suno|salam|assalam|aoa|hello|hi|hey|bhai|janab|adaab)\b/i.test(lower) || /^(سلام|وعلیکم|ہیلو|سنو)/.test(text.trim())) {
+    return { type: 'greeting', rawText: text };
+  }
+
+  if (/report|list|stock|summary|hisab|کھاتہ|رپورٹ|اسٹاک/i.test(lower)) {
+    const reportType = /sale/i.test(lower) ? 'sales' : /low|short|kam/i.test(lower) ? 'low_stock' : 'inventory';
+    return { type: 'generate_report', reportType };
+  }
+
+  return { type: 'unknown', rawText: text };
 }
 
 /**
@@ -156,7 +245,10 @@ export async function extractBusinessDetails(text) {
   const VALID_TYPES = ['general', 'kiryana', 'medical', 'clothing', 'restaurant', 'electronics', 'services', 'auto', 'salon'];
 
   try {
-    const parsed = JSON.parse(await chatCompletion(BUSINESS_DETAILS_PROMPT, text));
+    const raw = await chatCompletion(BUSINESS_DETAILS_PROMPT, text);
+    const parsed = extractJson(raw);
+    if (!parsed) return null;
+
     const strOrNull = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
     const rawType = strOrNull(parsed.businessType);
     const details = {
@@ -181,8 +273,9 @@ export async function extractInventoryItems(text) {
   if (!llmConfigured()) return null;
 
   try {
-    const parsed = JSON.parse(await chatCompletion(INVENTORY_PROMPT, text));
-    if (!Array.isArray(parsed.items)) return null;
+    const raw = await chatCompletion(INVENTORY_PROMPT, text);
+    const parsed = extractJson(raw);
+    if (!parsed || !Array.isArray(parsed.items)) return null;
 
     const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
@@ -216,7 +309,11 @@ export async function resolveItemName(saidName, inventoryNames) {
       ITEM_RESOLVE_PROMPT,
       `Inventory: ${inventoryNames.join(', ')}\nItem said: ${saidName}`
     );
-    const cleaned = raw.trim().replace(/^["'`]+|["'`]+$/g, '');
+    const cleaned = raw
+      .trim()
+      .replace(/^```(?:json)?\s*|\s*```$/gi, '')
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .trim();
     if (!cleaned || cleaned.toLowerCase() === 'null') return null;
     return inventoryNames.find((n) => n.toLowerCase() === cleaned.toLowerCase()) ?? null;
   } catch {

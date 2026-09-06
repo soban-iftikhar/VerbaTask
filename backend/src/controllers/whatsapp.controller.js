@@ -926,7 +926,7 @@ async function offerItemDisambiguation(merchant, command) {
   const language = command.language || merchant.language || 'ur';
   const saidName = command.item?.name ?? '';
 
-  let ranked = await findSimilarInventoryItems(merchant._id, saidName, { limit: 2, minScore: 0.5 });
+  let ranked = await findSimilarInventoryItems(merchant._id, saidName, { limit: 2, minScore: 0.35 });
 
   if (!ranked.length) {
     const inventory = await InventoryItem.find({ merchantId: merchant._id }).limit(100);
