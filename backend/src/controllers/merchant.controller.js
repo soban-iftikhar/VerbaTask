@@ -16,6 +16,7 @@ import {
   normalizePaymentMethod,
   DEFAULT_ACCEPTED_PAYMENT_METHODS,
 } from '../constants/paymentMethods.js';
+import { emitDashboardUpdate } from '../socket.js';
 
 /**
  * GET /api/merchant/profile
@@ -133,6 +134,8 @@ export async function updateProfile(req, res) {
       return res.status(404).json({ success: false, error: { message: 'Merchant not found' } });
     }
 
+    emitDashboardUpdate(req.merchantId, { type: 'profile' });
+
     return res.status(200).json({
       success: true,
       data: merchant,
@@ -221,6 +224,8 @@ export async function updatePaymentMethods(req, res) {
       { $set: updates },
       { new: true }
     ).select('acceptedPaymentMethods paymentDetails businessName');
+
+    emitDashboardUpdate(req.merchantId, { type: 'payment_methods' });
 
     return res.status(200).json({
       success: true,

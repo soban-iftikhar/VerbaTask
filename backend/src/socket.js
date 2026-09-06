@@ -6,31 +6,64 @@ let io;
 export function initSocketIO(httpServer) {
   io = new Server(httpServer, {
     cors: {
-      origin: '*', // Keep loose for hackathon
-      methods: ['GET', 'POST'],
+      origin: '*',
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+      credentials: false,
     },
+    transports: ['websocket', 'polling'],
+    pingTimeout: 30000,
+    pingInterval: 25000,
   });
 
   io.on('connection', (socket) => {
+    // 1. Check handshake auth or query for automatic room join upon connecting
+    const handshakeMerchantId =
+      socket.handshake.auth?.merchantId || socket.handshake.query?.merchantId;
+    if (handshakeMerchantId) {
+      const room = `merchant_${handshakeMerchantId.toString().trim()}`;
+      socket.join(room);
+      console.log(`[Socket.io] Socket ${socket.id} auto-joined room ${room} via handshake`);
+    }
+
+    // 2. Explicit join event handler (handles object or raw string)
     socket.on('join', async (data) => {
       try {
-        const { merchantId } = data; // For simplicity in hackathon, frontend can just pass merchantId directly, or token. Let's just use merchantId for now since auth might be simple.
-        if (!merchantId) return;
+        const rawId = typeof data === 'string' ? data : data?.merchantId;
+        if (!rawId) return;
 
-        const room = `merchant_${merchantId}`;
+        const room = `merchant_${rawId.toString().trim()}`;
         socket.join(room);
-        console.log(`Socket ${socket.id} joined room ${room}`);
+        console.log(`[Socket.io] Socket ${socket.id} joined room ${room}`);
       } catch (err) {
-        console.error('Socket join error:', err.message);
+        console.error('[Socket.io] join error:', err.message);
       }
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log(`[Socket.io] Socket ${socket.id} disconnected: ${reason}`);
     });
   });
 
   return io;
 }
 
-export function emitDashboardUpdate(merchantId) {
+export function emitDashboardUpdate(merchantId, meta = {}) {
   if (!io || !merchantId) return;
-  const room = `merchant_${merchantId.toString()}`;
-  io.to(room).emit('dashboard_update', { timestamp: Date.now() });
+  const idStr = merchantId.toString().trim();
+  const room = `merchant_${idStr}`;
+  const payload = {
+    timestamp: Date.now(),
+    merchantId: idStr,
+    ...meta,
+  };
+
+  // 1. Emit targeted event to the merchant's room
+  io.to(room).emit('dashboard_update', payload);
+
+  // 2. Also emit merchant_update broadcast (filtered by merchantId on client)
+  // as an additional safety net against room join desync
+  io.emit('merchant_update', payload);
+
+  console.log(`[Socket.io] Emitted update for merchant ${idStr}:`, meta);
 }

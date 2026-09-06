@@ -156,7 +156,7 @@ export const createOrder = async (command) => {
   }
 
   // 7. Emit WebSocket event to refresh dashboard
-  emitDashboardUpdate(merchantId);
+  emitDashboardUpdate(merchantId, { type: 'order', orderId: order._id, total, status });
 
   return order;
 };

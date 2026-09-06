@@ -23,7 +23,8 @@ export function useInventory() {
   return useQuery({
     queryKey: queryKeys.inventory(),
     queryFn: () => api.get('/api/inventory'),
-    staleTime: 60 * 1000,
+    staleTime: 10 * 1000,
+    refetchInterval: 15 * 1000,
   });
 }
 

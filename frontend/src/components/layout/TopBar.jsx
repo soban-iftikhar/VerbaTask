@@ -11,11 +11,12 @@ const ROUTE_TITLES = {
   '/dashboard/settings': 'Store Settings',
 };
 
-export function TopBar({ onOpenMobileMenu }) {
+export function TopBar({ onOpenMobileMenu, realtime }) {
   const location = useLocation();
   const { theme, setTheme } = useUiStore();
 
   const title = ROUTE_TITLES[location.pathname] || 'Dashboard';
+  const status = realtime?.connectionStatus || 'connected';
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -50,10 +51,36 @@ export function TopBar({ onOpenMobileMenu }) {
           <span className="hidden sm:inline">Landing Page</span>
         </Link>
 
-        <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
-          <Circle className="w-2 h-2 fill-current animate-pulse text-emerald-500 dark:text-emerald-400" />
-          <span>System Live</span>
-        </div>
+        {status === 'connected' && (
+          <button
+            type="button"
+            onClick={realtime?.forceSync}
+            title="Real-time live sync active. Click to refresh instantly."
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-semibold cursor-pointer hover:bg-emerald-500/20 transition-colors"
+          >
+            <Circle className="w-2 h-2 fill-current animate-pulse text-emerald-500 dark:text-emerald-400" />
+            <span>Live Sync</span>
+          </button>
+        )}
+
+        {status === 'connecting' && (
+          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-medium">
+            <Circle className="w-2 h-2 fill-current animate-pulse text-amber-500 dark:text-amber-400" />
+            <span>Connecting...</span>
+          </div>
+        )}
+
+        {status === 'disconnected' && (
+          <button
+            type="button"
+            onClick={realtime?.forceSync}
+            title="Disconnected. Click to reconnect & sync."
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-500/10 border border-zinc-500/20 text-zinc-600 dark:text-zinc-400 text-xs font-medium hover:bg-zinc-500/20 cursor-pointer transition-colors"
+          >
+            <Circle className="w-2 h-2 fill-current text-zinc-400" />
+            <span>Offline (Click to sync)</span>
+          </button>
+        )}
 
         <button
           type="button"

@@ -7,12 +7,13 @@ import { router } from './lib/router';
 import './app.css';
 
 const queryClient = new QueryClient({
- defaultOptions: {
- queries: {
- refetchOnWindowFocus: false,
- retry: 1,
- },
- },
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: true,
+      staleTime: 1000 * 10, // 10 seconds staleTime
+      retry: 1,
+    },
+  },
 });
 
 createRoot(document.getElementById('root')).render(

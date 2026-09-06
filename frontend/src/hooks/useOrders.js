@@ -1,12 +1,30 @@
+import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { queryKeys } from '../lib/queryKeys';
+import { socket } from '../lib/socket';
 
 export function useOrders() {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.orders() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
+    };
+
+    socket.on('dashboard_update', handleUpdate);
+
+    return () => {
+      socket.off('dashboard_update', handleUpdate);
+    };
+  }, [queryClient]);
+
   return useQuery({
     queryKey: queryKeys.orders(),
     queryFn: () => api.get('/api/orders'),
-    staleTime: 60 * 1000,
+    staleTime: 10 * 1000,
+    refetchInterval: 15 * 1000,
   });
 }
 

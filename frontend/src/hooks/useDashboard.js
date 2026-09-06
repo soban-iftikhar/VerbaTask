@@ -11,6 +11,8 @@ export function useDashboard() {
     const handleUpdate = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
       queryClient.invalidateQueries({ queryKey: queryKeys.inventory() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.orders() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals() });
     };
 
     socket.on('dashboard_update', handleUpdate);
@@ -23,7 +25,8 @@ export function useDashboard() {
   return useQuery({
     queryKey: queryKeys.dashboard(),
     queryFn: () => api.get('/api/dashboard/overview'),
-    staleTime: 60 * 1000 * 5, // 5 minutes, since we have real-time invalidation
+    staleTime: 10 * 1000,
+    refetchInterval: 15 * 1000, // 15s gentle polling fallback
   });
 }
 

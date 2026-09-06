@@ -326,6 +326,7 @@ async function handleOnboarding(merchant, message) {
       }
       merchant.onboardingComplete = true;
       await merchant.save();
+      emitDashboardUpdate(merchant._id, { type: 'onboarding' });
       await ConversationState.deleteOne({ _id: state._id });
       return replyToMerchant(
         merchant,
