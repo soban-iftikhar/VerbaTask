@@ -115,83 +115,98 @@ function NewOrderModal({ isOpen, onClose }) {
  description="Create an order directly from the dashboard."
  maxWidth="max-w-xl"
  >
- <form onSubmit={handleSubmit} className="space-y-4">
- <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
- {items.map((item, idx) => (
- <div key={idx} className="flex items-start gap-2">
- <div className="flex-1">
- <select
- value={item.inventoryItemId}
- onChange={(e) => handleSelectItem(idx, e.target.value)}
- className="w-full h-10 px-3 text-[15px] bg-canvas text-ink border border-hairline-input rounded-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
- required
- >
- <option value="" disabled>
- Select item
- </option>
- {(inventory || []).map((inv) => (
- <option key={inv._id} value={inv._id}>
- {inv.name} ({formatQuantity(inv.quantity, inv.unit)} @ {formatPKR(inv.price)})
- </option>
- ))}
- </select>
- </div>
- <Input
- type="number"
- min="1"
- value={item.quantity}
- onChange={(e) => updateItem(idx, { quantity: Number(e.target.value) })}
- className="w-24"
- required
- />
- <div className="w-28 pt-2 text-sm text-ink font-tabular text-right">
- {formatPKR((item.price || 0) * (Number(item.quantity) || 0))}
- </div>
- {items.length > 1 && (
- <Button
- type="button"
- variant="ghost"
- size="sm"
- className="text-ruby hover:text-ruby hover:bg-ruby/10 px-2"
- onClick={() => removeLine(idx)}
- >
- <Trash2 className="w-4 h-4" />
- </Button>
- )}
- </div>
- ))}
- </div>
+  <form onSubmit={handleSubmit} className="space-y-4">
+    {/* Column Headers */}
+    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-mute px-1">
+      <span className="flex-1">Select Item</span>
+      <span className="w-20 shrink-0 text-center">Qty</span>
+      <span className="w-24 shrink-0 text-right">Subtotal</span>
+      {items.length > 1 && <span className="w-8 shrink-0" />}
+    </div>
 
- <Button
- type="button"
- variant="outline"
- size="sm"
- leftIcon={<Plus className="w-4 h-4" />}
- onClick={addLine}
- >
- Add item
- </Button>
+    <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+      {items.map((item, idx) => (
+        <div key={idx} className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <select
+              value={item.inventoryItemId}
+              onChange={(e) => handleSelectItem(idx, e.target.value)}
+              className="w-full h-10 px-3 text-sm font-medium bg-canvas text-ink border border-hairline-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary truncate cursor-pointer shadow-xs"
+              required
+            >
+              <option value="" disabled>
+                Select an item from inventory...
+              </option>
+              {(inventory || []).map((inv) => (
+                <option key={inv._id} value={inv._id} className="bg-canvas text-ink py-1">
+                  {inv.name} ({formatQuantity(inv.quantity, inv.unit)} in stock • {formatPKR(inv.price)})
+                </option>
+              ))}
+            </select>
+          </div>
 
- <div className="grid grid-cols-2 gap-4 pt-2 border-t border-hairline">
- <div className="flex flex-col gap-1.5">
- <label className="text-xs font-medium text-ink-secondary">Payment method</label>
- <select
- value={paymentMethod}
- onChange={(e) => setPaymentMethod(e.target.value)}
- className="h-10 px-3 text-[15px] bg-canvas text-ink border border-hairline-input rounded-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
- >
- {PAYMENT_METHODS.map((m) => (
- <option key={m} value={m}>
- {m.charAt(0).toUpperCase() + m.slice(1)}
- </option>
- ))}
- </select>
- </div>
- <Card padding="sm" className="bg-canvas-soft flex flex-col justify-center">
- <p className="text-[11px] text-ink-mute uppercase tracking-wider">Total</p>
- <p className="text-lg font-light text-ink font-tabular">{formatPKR(total)}</p>
- </Card>
- </div>
+          <div className="w-20 shrink-0">
+            <input
+              type="number"
+              min="1"
+              value={item.quantity}
+              onChange={(e) => updateItem(idx, { quantity: Number(e.target.value) })}
+              className="w-full h-10 px-2 text-center text-sm font-tabular font-semibold bg-canvas text-ink border border-hairline-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary shadow-xs"
+              placeholder="Qty"
+              required
+            />
+          </div>
+
+          <div className="w-24 shrink-0 text-sm text-ink font-semibold font-tabular text-right truncate">
+            {formatPKR((item.price || 0) * (Number(item.quantity) || 0))}
+          </div>
+
+          {items.length > 1 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-ruby hover:text-ruby hover:bg-ruby/10 w-8 h-10 p-0 shrink-0 flex items-center justify-center rounded-lg"
+              onClick={() => removeLine(idx)}
+              title="Remove item"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
+      ))}
+    </div>
+
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      leftIcon={<Plus className="w-4 h-4" />}
+      onClick={addLine}
+    >
+      Add item
+    </Button>
+
+    <div className="grid grid-cols-2 gap-4 pt-2 border-t border-hairline">
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium text-ink-secondary">Payment method</label>
+        <select
+          value={paymentMethod}
+          onChange={(e) => setPaymentMethod(e.target.value)}
+          className="h-10 px-3 text-sm font-medium bg-canvas text-ink border border-hairline-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary cursor-pointer shadow-xs"
+        >
+          {PAYMENT_METHODS.map((m) => (
+            <option key={m} value={m} className="bg-canvas text-ink">
+              {m.charAt(0).toUpperCase() + m.slice(1)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <Card padding="sm" className="bg-canvas-soft flex flex-col justify-center">
+        <p className="text-[11px] text-ink-mute uppercase tracking-wider font-semibold">Total</p>
+        <p className="text-lg font-semibold text-ink font-tabular">{formatPKR(total)}</p>
+      </Card>
+    </div>
 
  <div className="flex justify-end gap-2 pt-2">
  <Button type="button" variant="ghost" onClick={onClose} disabled={createOrder.isPending}>

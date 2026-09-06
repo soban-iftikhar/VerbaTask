@@ -14,6 +14,7 @@ export const Input = forwardRef(function Input(
  leftIcon,
  rightIcon,
  className = '',
+ containerClassName = '',
  required,
  ...props
  },
@@ -22,7 +23,7 @@ export const Input = forwardRef(function Input(
  const inputId = id || (label ? `input-${label.toLowerCase().replace(/\s+/g, '-')}` : undefined);
 
  return (
- <div className="w-full flex flex-col gap-1.5 text-left">
+ <div className={`flex flex-col gap-1.5 text-left ${containerClassName || 'w-full'}`}>
  {label && (
  <label
  htmlFor={inputId}
