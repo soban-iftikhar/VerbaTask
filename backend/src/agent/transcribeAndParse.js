@@ -50,22 +50,26 @@ export async function transcribeAndParse(buffer, mimeType, language = 'ur') {
 }
 
 async function transcribeWithRetry(buffer, cleanMimeType, language) {
-  // Strategy 1: Ultra-fast whisper-large-v3-turbo (~200ms latency) with merchant language
+  // For Urdu speech, whisper-large-v3 provides authentic Perso-Arabic script accuracy.
+  // whisper-large-v3-turbo serves as high-throughput fallback.
+  const primaryModel = language === 'ur' ? 'whisper-large-v3' : 'whisper-large-v3-turbo';
+  const fallbackModel = language === 'ur' ? 'whisper-large-v3-turbo' : 'whisper-large-v3';
+
   try {
-    return await transcribe(buffer, cleanMimeType, language, 'whisper-large-v3-turbo');
+    return await transcribe(buffer, cleanMimeType, language, primaryModel);
   } catch (err1) {
     const status1 = err1.response?.status;
-    console.warn(`[voice] whisper-large-v3-turbo (${language}) failed (${status1 || err1.message}). Retrying with auto-detect...`);
+    console.warn(`[voice] ${primaryModel} (${language}) failed (${status1 || err1.message}). Retrying with auto-detect...`);
 
-    // Strategy 2: Retry turbo with auto-detect language (handles mixed Urdu-English speech)
+    // Strategy 2: Retry with auto-detect language (handles mixed Urdu-English speech)
     try {
-      return await transcribe(buffer, cleanMimeType, null, 'whisper-large-v3-turbo');
+      return await transcribe(buffer, cleanMimeType, null, primaryModel);
     } catch (err2) {
       const status2 = err2.response?.status;
-      console.warn(`[voice] whisper-large-v3-turbo (auto) failed (${status2 || err2.message}). Falling back to whisper-large-v3...`);
+      console.warn(`[voice] ${primaryModel} (auto) failed (${status2 || err2.message}). Falling back to ${fallbackModel}...`);
 
-      // Strategy 3: Fallback to classic whisper-large-v3
-      return await transcribe(buffer, cleanMimeType, language, 'whisper-large-v3');
+      // Strategy 3: Fallback model
+      return await transcribe(buffer, cleanMimeType, language, fallbackModel);
     }
   }
 }

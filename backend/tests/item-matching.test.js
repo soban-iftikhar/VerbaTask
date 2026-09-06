@@ -52,6 +52,21 @@ describe('Cross-Lingual & Spell Correction Item Matching Tests', () => {
       const score = similarity('Sugar', 'چینی');
       assert.ok(score >= 0.85, `Expected score >= 0.85, got ${score}`);
     });
+
+    test('matches Urdu script مکس مٹھائی with Mix Mithai', () => {
+      const score = similarity('مکس مٹھائی', 'Mix Mithai');
+      assert.ok(score >= 0.85, `Expected score >= 0.85, got ${score}`);
+    });
+
+    test('matches Urdu script سموسہ with Samosa', () => {
+      const score = similarity('سموسہ', 'Samosa');
+      assert.ok(score >= 0.85, `Expected score >= 0.85, got ${score}`);
+    });
+
+    test('matches Urdu script بریانی with Biryani', () => {
+      const score = similarity('بریانی', 'Biryani');
+      assert.ok(score >= 0.85, `Expected score >= 0.85, got ${score}`);
+    });
   });
 
   describe('phonetic misspelling matching', () => {

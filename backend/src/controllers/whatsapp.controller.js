@@ -385,6 +385,23 @@ async function handleOnboardedMerchant(merchant, message) {
           text: '✅ Language changed to English. All replies will now be in English.'
         }, 'voice', 'en');
       }
+
+      // Fast-path: If user taps ANY payment button (e.g. pay_cash, pay_easypaisa, pay_jazzcash)
+      if (buttonId?.startsWith('pay_')) {
+        const existingState = await ConversationState.findOne({
+          whatsappNumber: merchant.whatsappNumber,
+          flow: 'guided_order',
+        });
+        if (existingState) {
+          const method = buttonId.replace('pay_', '');
+          existingState.data = {
+            ...(existingState.data || {}),
+            paymentMethod: method,
+            quantity: existingState.data?.quantity || 1,
+          };
+          return await finalizeGuidedOrder(merchant, existingState);
+        }
+      }
     }
 
     const existingState = await ConversationState.findOne({
@@ -672,8 +689,8 @@ async function continueGuidedOrder(merchant, message, state) {
     case 'awaiting_item': {
       if (listId === 'show_more') {
         const nextPage = (state.data?.page ?? 0) + 1;
-        state.data = { ...state.data, page: nextPage };
-        await state.save();
+        const updatedData = { ...state.data, page: nextPage };
+        await ConversationState.findByIdAndUpdate(state._id, { $set: { data: updatedData } });
         return sendItemPickerPage(merchant, nextPage);
       }
       if (!listId?.startsWith('item_')) {
@@ -691,25 +708,26 @@ async function continueGuidedOrder(merchant, message, state) {
 
         if (best && clearMatch) {
           const typedQty = qtyMatch ? parseInt(qtyMatch[1], 10) : null;
-          state.data = {
+          const updatedData = {
             ...state.data,
             itemId: best.item._id.toString(),
             itemName: best.item.name,
             price: best.item.price,
           };
           if (typedQty && typedQty > 0) {
-            state.data.quantity = typedQty;
-            state.step = 'awaiting_payment_method';
-            await state.save();
-            return sendInteractiveButtons(merchant.whatsappNumber, 'How was it paid?', [
-              { id: 'pay_cash', title: 'Cash' },
-              { id: 'pay_easypaisa', title: 'EasyPaisa' },
-              { id: 'pay_jazzcash', title: 'JazzCash' },
-            ]);
+            updatedData.quantity = typedQty;
+            await ConversationState.findByIdAndUpdate(state._id, {
+              $set: { step: 'awaiting_payment_method', data: updatedData },
+            });
+            return sendPaymentMethodPicker(merchant);
           }
-          state.step = 'awaiting_quantity';
-          await state.save();
-          return sendTextMessage(merchant.whatsappNumber, `How many ${best.item.name} did you sell?`);
+          await ConversationState.findByIdAndUpdate(state._id, {
+            $set: { step: 'awaiting_quantity', data: updatedData },
+          });
+          const qtyPrompt = merchant.language === 'ur'
+            ? `آپ نے کتنے ${best.item.name} فروخت کیے؟`
+            : `How many ${best.item.name} did you sell?`;
+          return sendTextMessage(merchant.whatsappNumber, qtyPrompt);
         }
 
         if (ranked.length > 1) {
@@ -726,68 +744,83 @@ async function continueGuidedOrder(merchant, message, state) {
       const item = await InventoryItem.findById(listId.replace('item_', ''));
       if (!item) return sendTextMessage(merchant.whatsappNumber, "Couldn't find that item — try again.");
 
-      state.data = {
+      const updatedData = {
         ...state.data,
         itemId: item._id.toString(),
         itemName: item.name,
         price: item.price, // stashed so finalize can compute the total without a re-fetch
       };
-      state.step = 'awaiting_quantity';
-      await state.save();
-      return sendTextMessage(merchant.whatsappNumber, `How many ${item.name} did you sell?`);
+      await ConversationState.findByIdAndUpdate(state._id, {
+        $set: { step: 'awaiting_quantity', data: updatedData },
+      });
+      const qtyPrompt = merchant.language === 'ur'
+        ? `آپ نے کتنے ${item.name} فروخت کیے؟`
+        : `How many ${item.name} did you sell?`;
+      return sendTextMessage(merchant.whatsappNumber, qtyPrompt);
     }
 
     case 'awaiting_quantity': {
-      // Check if user tapped a payment button or sent a payment method (in case of stale/desynced prompt)
+      // 1. Direct payment button or payment method name provided
       const paymentAttempt = buttonId?.startsWith('pay_')
         ? buttonId.replace('pay_', '')
         : normalizePaymentMethod(message.text?.body?.trim() || message.interactive?.button_reply?.title?.trim());
 
       if (paymentAttempt) {
-        if (state.data?.quantity) {
-          state.data = { ...state.data, paymentMethod: paymentAttempt };
-          await state.save();
-          return finalizeGuidedOrder(merchant, state);
-        } else {
-          const prompt = merchant.language === 'ur'
-            ? 'برائے مہربانی پہلے تعداد درج کریں (مثلاً 5 یا 45) یا دوبارہ شروع کرنے کے لیے "cancel" لکھیں۔'
-            : 'Please enter the quantity first (e.g. 5 or 45), or type "cancel" to restart.';
-          return sendTextMessage(merchant.whatsappNumber, prompt);
-        }
+        state.data = {
+          ...(state.data || {}),
+          quantity: state.data?.quantity || 1,
+          paymentMethod: paymentAttempt,
+        };
+        return finalizeGuidedOrder(merchant, state);
       }
 
-      const raw = message.text?.body?.trim() || message.interactive?.button_reply?.title?.trim();
-      const numMatch = raw?.match(/\d+/);
+      // 2. Parse quantity (and optional trailing payment method, e.g. "5 cash")
+      const raw = (message.text?.body?.trim() || message.interactive?.button_reply?.title?.trim() || '');
+      const numMatch = raw.match(/\d+/);
       const quantity = numMatch ? parseInt(numMatch[0], 10) : parseInt(raw, 10);
-      if (!quantity || quantity <= 0) {
-        const errorMsg = merchant.language === 'ur'
-          ? 'برائے مہربانی درست تعداد درج کریں (مثلاً 5 یا 45) یا ختم کرنے کے لیے "cancel" لکھیں۔'
-          : 'Please send a valid number (e.g. 5 or 45). Send "cancel" to restart.';
-        return sendTextMessage(merchant.whatsappNumber, errorMsg);
+
+      // Check if message also included payment method (e.g. "2 easypaisa", "5 نقد")
+      const trailingText = raw.replace(/\d+/, '').trim();
+      const inlinePayment = normalizePaymentMethod(trailingText);
+
+      if (quantity && quantity > 0) {
+        if (inlinePayment) {
+          state.data = {
+            ...(state.data || {}),
+            quantity,
+            paymentMethod: inlinePayment,
+          };
+          return finalizeGuidedOrder(merchant, state);
+        }
+
+        const updatedData = { ...(state.data || {}), quantity };
+        await ConversationState.findByIdAndUpdate(state._id, {
+          $set: { step: 'awaiting_payment_method', data: updatedData },
+        });
+        return sendPaymentMethodPicker(merchant);
       }
-      state.data = { ...state.data, quantity };
-      state.step = 'awaiting_payment_method';
-      await state.save();
-      return sendPaymentMethodPicker(merchant);
+
+      // If neither quantity nor payment method matched:
+      const errorMsg = merchant.language === 'ur'
+        ? 'برائے مہربانی درست تعداد درج کریں (مثلاً 5 یا 45) یا ختم کرنے کے لیے "cancel" لکھیں۔'
+        : 'Please send a valid number (e.g. 5 or 45). Send "cancel" to restart.';
+      return sendTextMessage(merchant.whatsappNumber, errorMsg);
     }
 
     case 'awaiting_payment_method': {
-      const allowedMethods = merchant.acceptedPaymentMethods?.length
+      const allowedMethods = (merchant.acceptedPaymentMethods && merchant.acceptedPaymentMethods.length > 0)
         ? merchant.acceptedPaymentMethods
         : DEFAULT_ACCEPTED_PAYMENT_METHODS;
 
       let paymentMethod = null;
       if (buttonId && buttonId.startsWith('pay_')) {
-        const candidate = buttonId.replace('pay_', '');
-        if (allowedMethods.includes(candidate)) {
-          paymentMethod = candidate;
-        }
+        paymentMethod = buttonId.replace('pay_', '');
       }
 
       if (!paymentMethod) {
         const typed = message.text?.body?.trim() || message.interactive?.button_reply?.title?.trim();
         const candidate = normalizePaymentMethod(typed);
-        if (candidate && allowedMethods.includes(candidate)) {
+        if (candidate) {
           paymentMethod = candidate;
         } else if (typed) {
           // If merchant replied with 1, 2, 3 corresponding to options
@@ -795,6 +828,17 @@ async function continueGuidedOrder(merchant, message, state) {
           if (!isNaN(num) && num >= 1 && num <= allowedMethods.length) {
             paymentMethod = allowedMethods[num - 1];
           }
+        }
+      }
+
+      if (!paymentMethod) {
+        const rawLower = (message.text?.body || message.interactive?.button_reply?.title || '').toLowerCase().trim();
+        if (rawLower.includes('cash') || rawLower.includes('naqad') || rawLower.includes('نقد') || rawLower.includes('روپے')) {
+          paymentMethod = 'cash';
+        } else if (rawLower.includes('easy') || rawLower.includes('ایزی')) {
+          paymentMethod = 'easypaisa';
+        } else if (rawLower.includes('jazz') || rawLower.includes('جاز')) {
+          paymentMethod = 'jazzcash';
         }
       }
 
@@ -808,8 +852,7 @@ async function continueGuidedOrder(merchant, message, state) {
         return sendTextMessage(merchant.whatsappNumber, prompt);
       }
 
-      state.data = { ...state.data, paymentMethod };
-      await state.save();
+      state.data = { ...(state.data || {}), paymentMethod };
       return finalizeGuidedOrder(merchant, state);
     }
 
@@ -822,7 +865,7 @@ async function continueGuidedOrder(merchant, message, state) {
 
 /** Sends interactive buttons or options for merchant's accepted payment methods. */
 async function sendPaymentMethodPicker(merchant) {
-  const allowed = merchant.acceptedPaymentMethods?.length
+  const allowed = (merchant.acceptedPaymentMethods && merchant.acceptedPaymentMethods.length > 0)
     ? merchant.acceptedPaymentMethods
     : DEFAULT_ACCEPTED_PAYMENT_METHODS;
 
@@ -855,16 +898,34 @@ async function sendPaymentMethodPicker(merchant) {
 
 /** Logs the completed guided order via crm/ and clears the flow state. */
 async function finalizeGuidedOrder(merchant, state) {
-  const { itemId, itemName, quantity, paymentMethod, price } = state.data;
+  const data = state?.data || {};
+  let { itemId, itemName, quantity, paymentMethod, price } = data;
+
+  const safeQty = Number(quantity) > 0 ? Number(quantity) : 1;
+  const safeMethod = paymentMethod || 'cash';
+  let safeName = itemName;
+  let safePrice = price;
+
+  if (!safeName && itemId) {
+    try {
+      const itm = await InventoryItem.findById(itemId);
+      if (itm) {
+        safeName = itm.name;
+        if (safePrice == null) safePrice = itm.price;
+      }
+    } catch (err) {
+      console.error('Error finding item in finalizeGuidedOrder:', err.message);
+    }
+  }
 
   await createOrderViaCrm(merchant, {
     type: 'log_sale',
     merchantId: merchant._id,
-    item: { name: itemName, quantity, inventoryItemId: itemId },
-    paymentMethod,
+    item: { name: safeName || 'Item', quantity: safeQty, inventoryItemId: itemId },
+    paymentMethod: safeMethod,
     // Guided flow never asks for a price — derive it from the stock list's
     // unit price; null if the merchant never set one.
-    amount: price != null ? price * quantity : null,
+    amount: safePrice != null ? safePrice * safeQty : null,
     source: 'guided',
   });
 

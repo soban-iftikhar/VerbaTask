@@ -327,6 +327,7 @@ export async function synthesizeSpeech(rawText, options = {}) {
   }
 
   const language = options.language === 'en' ? 'en' : 'ur';
+  const voice = options.voice || null;
   const explicitProvider = options.provider?.toLowerCase();
   if (explicitProvider === 'google') return synthesizeWithGoogle(text, language);
   if (explicitProvider === 'edge') return synthesizeWithEdge(text, language, voice);
@@ -334,19 +335,18 @@ export async function synthesizeSpeech(rawText, options = {}) {
   if (explicitProvider === 'elevenlabs') return synthesizeWithElevenLabs(text, language, voice);
 
   const provider = getActiveProvider();
-  const voice = options.voice || null;
 
-  // 1. Gemini if selected or key is configured
-  if (provider === 'gemini' || process.env.GEMINI_API_KEY) {
+  // 1. Edge TTS FIRST by default (fastest ~200ms, zero rate limits, authentic Pakistani Urdu)
+  if (provider === 'edge' || !provider || provider === 'auto') {
     try {
-      return await synthesizeWithGemini(text, language, voice);
-    } catch (err) {
-      console.warn(`[tts] Gemini TTS failed (${err.message}), trying next provider...`);
+      return await synthesizeWithEdge(text, language, voice);
+    } catch (edgeErr) {
+      console.warn(`[tts] Edge TTS failed (${edgeErr.message}), trying next provider...`);
     }
   }
 
-  // 2. ElevenLabs if selected or key is configured
-  if (provider === 'elevenlabs' || process.env.ELEVENLABS_API_KEY) {
+  // 2. ElevenLabs if provider is elevenlabs or as fallback
+  if (provider === 'elevenlabs' || (process.env.ELEVENLABS_API_KEY && language === 'en')) {
     try {
       return await synthesizeWithElevenLabs(text, language, voice);
     } catch (err) {
@@ -354,12 +354,12 @@ export async function synthesizeSpeech(rawText, options = {}) {
     }
   }
 
-  // 3. Microsoft Edge Neural TTS
-  if (provider === 'edge' || !provider || provider === 'auto') {
+  // 3. Gemini TTS only if explicitly chosen
+  if (provider === 'gemini') {
     try {
-      return await synthesizeWithEdge(text, language, voice);
-    } catch (edgeErr) {
-      console.warn(`[tts] Edge TTS failed (${edgeErr.message}), falling back to Google TTS...`);
+      return await synthesizeWithGemini(text, language, voice);
+    } catch (err) {
+      console.warn(`[tts] Gemini TTS failed (${err.message}), trying next provider...`);
     }
   }
 

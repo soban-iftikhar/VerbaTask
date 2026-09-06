@@ -37,6 +37,9 @@ const BILINGUAL_GROUPS = [
   ['matches', 'machis', 'ماچس'],
   ['shampoo', 'شیمپو', 'sunsilk', 'سن سلک', 'head and shoulders'],
   ['toothpaste', 'tooth paste', 'ٹوتھ پیسٹ', 'colgate', 'کولگیٹ'],
+  ['mithai', 'methai', 'sweets', 'sweet', 'مٹھائی', 'mix mithai', 'مکس مٹھائی', 'halwa', 'حلوا', 'gulab jamun', 'گلاب جامن', 'rasgulla', 'رس گلہ', 'jalebi', 'جلیبی', 'barfi', 'برفی', 'laddu', 'لڈو'],
+  ['samosa', 'samosay', 'smosa', 'سموسہ', 'سموسے', 'pakora', 'pakoray', 'پکوڑے', 'roll', 'رول', 'patties', 'پیٹیز'],
+  ['biryani', 'beryani', 'بریانی', 'pulao', 'پلاؤ'],
 ];
 
 const CONCEPT_MAP = new Map();
@@ -193,6 +196,25 @@ export function crossLingualScore(na, nb) {
   return 0;
 }
 
+const URDU_TO_ROMAN_CHAR_MAP = {
+  'ا': 'a', 'آ': 'a', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ٹ': 't', 'ث': 's',
+  'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ڈ': 'd', 'ذ': 'z',
+  'ر': 'r', 'ڑ': 'r', 'ز': 'z', 'ژ': 'z', 'س': 's', 'ش': 'sh', 'ص': 's',
+  'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'q',
+  'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ں': 'n', 'و': 'o',
+  'ہ': 'h', 'ھ': 'h', 'ء': '', 'ئ': 'i', 'ی': 'i', 'ے': 'e', 'ۂ': 'h', 'ۃ': 't',
+};
+
+export function transliterateUrdu(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .split('')
+    .map((c) => URDU_TO_ROMAN_CHAR_MAP[c] || c)
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * 0..1 similarity between two raw item names.
  * Evaluates cross-lingual concept matches, phonetic spelling equivalence,
@@ -207,6 +229,16 @@ export function similarity(a, b) {
   // 1. Cross-lingual match (e.g. "chawal" vs "Rice", "چاول" vs "Rice")
   const crossScore = crossLingualScore(na, nb);
   if (crossScore >= 0.85) return crossScore;
+
+  // Cross-script transliteration: if one item is Urdu script and the other Latin
+  const hasUrduA = /[\u0600-\u06FF]/.test(na);
+  const hasUrduB = /[\u0600-\u06FF]/.test(nb);
+  if (hasUrduA !== hasUrduB) {
+    const transA = hasUrduA ? normalizeName(transliterateUrdu(na)) : na;
+    const transB = hasUrduB ? normalizeName(transliterateUrdu(nb)) : nb;
+    const transScore = similarity(transA, transB);
+    if (transScore >= 0.70) return transScore;
+  }
 
   // 2. Phonetic equivalence (e.g. "riece" vs "rice", "sugr" vs "sugar")
   const pa = simplifyPhonetic(na);
