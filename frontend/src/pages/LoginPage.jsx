@@ -7,6 +7,7 @@ import { Link, useNavigate, useLocation } from 'react-router';
 import { toast } from 'sonner';
 import { Mail, Lock, ArrowRight } from 'lucide-react';
 import { AuthLayout } from '../components/layout/AuthLayout';
+import { DemoAccountCard } from '../components/DemoAccountCard';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
@@ -56,6 +57,15 @@ export function LoginPage() {
  title="Sign in to VerbaTask"
  subtitle="Access your business dashboard, inventory, and live orders."
  >
+ <DemoAccountCard />
+
+ <div className="relative flex items-center justify-center my-4">
+   <div className="border-t border-hairline w-full" />
+   <span className="bg-surface px-3 text-[11px] uppercase tracking-wider text-ink-mute font-medium absolute">
+     Or sign in manually
+   </span>
+ </div>
+
  <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
  <Input
  label="Email address"

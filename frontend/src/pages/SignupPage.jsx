@@ -7,6 +7,7 @@ import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Mail, Lock, ArrowRight } from 'lucide-react';
 import { AuthLayout } from '../components/layout/AuthLayout';
+import { DemoAccountCard } from '../components/DemoAccountCard';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
@@ -63,6 +64,15 @@ export function SignupPage() {
  title="Create your merchant account"
  subtitle="Start logging sales by voice note or guided buttons on WhatsApp."
  >
+ <DemoAccountCard />
+
+ <div className="relative flex items-center justify-center my-4">
+ <div className="border-t border-hairline w-full" />
+ <span className="bg-surface px-3 text-[11px] uppercase tracking-wider text-ink-mute font-medium absolute">
+ Or create a new account
+ </span>
+ </div>
+
  <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
  <Input
  label="Email address"
