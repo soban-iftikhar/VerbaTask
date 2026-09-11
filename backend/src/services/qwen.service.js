@@ -20,26 +20,36 @@ const SYSTEM_PROMPT = `You convert a Pakistani merchant's WhatsApp message (whic
 English, Urdu script, or Roman Urdu) into exactly one JSON object — no prose, no markdown fences,
 JSON only. Pick ONE of these shapes:
 
-1. Logging a sale:
+1. Logging a sale (customer purchased goods, selling items):
 {"type":"log_sale","item":{"name":"<item name as the merchant referred to it>","quantity":<number>},"paymentMethod":"cash"|"easypaisa"|"jazzcash"|"sadapay"|"nayapay"|"raast"|"meezan"|"hbl"|"ubl"|"alfalah"|"mcb"|"faysal"|"allied"|"askari"|"bank","amount":<number or null>}
-- CRITICAL: Merchants frequently use extreme shorthand. If the merchant mentions ANY grocery or retail item/product name (e.g. "lipton", "chawal", "daal chana", "2 chini", "ek dudh", "oil", "دو کلو چینی", "لیپٹن چائے", "چاول", "ایک صابن"), it is ALWAYS a sale! Never classify a product name as "unknown".
-- If the merchant mentions multiple items in one sale (e.g. "دو کلو چینی اور ایک لیپٹن چائے"), log the sale using the primary/first item in "item": {"name":"<first item>", "quantity": <num>}.
+- Used when an item is SOLD (e.g. "2 chawal cash", "becha", "sold", "furokht", "bechi", "beche", "دیے", "سیل", "2 sugar").
+- If the merchant mentions ANY product name without restock words (e.g. "lipton", "chawal", "daal chana", "2 chini", "ek dudh"), it is a sale.
 - If quantity is not explicitly stated (e.g. "lipton", "chawal"), default quantity to 1.
-- Supported payment methods include Pakistani wallets, EMIs, and banks (cash, easypaisa, jazzcash, sadapay, nayapay, raast, meezan, hbl, ubl, alfalah, mcb, faysal, allied, askari, or generic bank).
-- If paymentMethod is not explicitly stated, ALWAYS default to "cash".
-- If an amount/rupees is mentioned (e.g. "500 rupay", "500 rs", "500"), set amount to that number, otherwise null.
+- Supported payment methods: cash, easypaisa, jazzcash, sadapay, nayapay, raast, meezan, hbl, ubl, alfalah, mcb, faysal, allied, askari, or generic bank. Default to "cash".
 
-2. Creating an automation:
+2. Updating inventory / Adding incoming stock (restock/delivery):
+{"type":"update_stock","item":{"name":"<item name>","quantity":<number>,"price":<number or null>,"unit":"<unit or null>"},"action":"add"|"set"}
+- Used when new stock ARRIVES, goods are received, inventory is added, or stock is updated.
+- Common keywords: "maal aya", "aaya", "aayi", "restock", "add stock", "stock update", "added", "delivered", "وصول", "مال آیا", "آئے ہیں", "اسٹاک میں شامل کریں", "نیا مال", "add 50 rice".
+- Examples: "maal aya 20 chini" -> {"type":"update_stock","item":{"name":"chini","quantity":20},"action":"add"}
+- "add 50 rice price 300" -> {"type":"update_stock","item":{"name":"rice","quantity":50,"price":300},"action":"add"}
+- "20 کلو چاول آئے ہیں" -> {"type":"update_stock","item":{"name":"چاول","quantity":20,"unit":"کلو"},"action":"add"}
+
+3. Checking stock of a specific item:
+{"type":"check_stock","item":{"name":"<item name>"}}
+- Used when the merchant asks how much stock is left of a product.
+- Examples: "rice kitna hai", "check stock sugar", "chini ka stock kitna hai", "how much oil left", "چاول کا اسٹاک کتنا ہے".
+
+4. Creating an automation:
 {"type":"create_workflow","trigger":"message"|"schedule"|"threshold","condition":{...},"action":{...},"rawInstruction":"<original text>"}
 
-3. Greetings or casual opening (e.g. "assalam o alaikum", "suno", "hello", "hi", "bhai"):
+5. Greetings or casual opening (e.g. "assalam o alaikum", "suno", "hello", "hi", "bhai"):
 {"type":"greeting","rawText":"<original text>"}
 
-4. Requesting a report (e.g. "send me sales report", "inventory list", "mujhe inventory ki report bhejo", "sales ki report", "short stock", "کونسا سامان کم ہے"):
+6. Requesting a PDF report (e.g. "send me sales report", "inventory report", "mujhe inventory ki report bhejo", "sales ki report", "short stock report", "رپورٹ بھیجو"):
 {"type":"generate_report","reportType":"inventory"|"sales"|"low_stock"|"top_selling"|"expiring"}
-- Match ANY request in English, Roman Urdu, or Urdu script that asks for a report, list, or summary. Examples: "inventory report", "mujhe inventory bhejo", "sales dikhao", "stock check karna hai".
 
-5. Anything else where NO product, report, greeting, or automation can be identified:
+7. Anything else where NO product, report, greeting, stock update, or automation can be identified:
 {"type":"unknown","rawText":"<original text>"}`;
 
 const BUSINESS_DETAILS_PROMPT = `You extract business details from a merchant's
@@ -178,6 +188,106 @@ async function chatCompletion(systemPrompt, userText) {
   return data?.output?.choices?.[0]?.message?.content ?? data?.output?.text ?? '';
 }
 
+const URDU_DIGITS_MAP = {
+  '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+  '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+};
+
+const NUMBER_WORDS_MAP = {
+  'ایک': 1, 'دو': 2, 'تین': 3, 'چار': 4, 'پانچ': 5, 'چھ': 6, 'سات': 7, 'آٹھ': 8, 'نو': 9, 'دس': 10,
+  'گیارہ': 11, 'بارہ': 12, 'تیرہ': 13, 'چودہ': 14, 'پندرہ': 15, 'سولہ': 16, 'سترہ': 17, 'اٹھارہ': 18, 'انیس': 19, 'بیس': 20,
+  'پچیس': 25, 'تیس': 30, 'چالیس': 40, 'پچاس': 50, 'سو': 100,
+  'ek': 1, 'do': 2, 'teen': 3, 'char': 4, 'panch': 5, 'che': 6, 'chhe': 6, 'saat': 7, 'aath': 8, 'nau': 9, 'das': 10,
+  'gyarah': 11, 'barah': 12, 'terah': 13, 'chaudah': 14, 'pandrah': 15, 'solah': 16, 'satrah': 17, 'atharah': 18, 'unnees': 19, 'bees': 20,
+  'pachees': 25, 'tees': 30, 'chalees': 40, 'pachas': 50, 'sau': 100,
+};
+
+const NUMBER_WORDS_REGEX = new RegExp(
+  `\\b(?:${Object.keys(NUMBER_WORDS_MAP).filter((w) => /^[a-z]+$/i.test(w)).join('|')})\\b|(?:${Object.keys(NUMBER_WORDS_MAP).filter((w) => !/^[a-z]+$/i.test(w)).join('|')})`,
+  'gi'
+);
+
+const UNIT_REGEX = /(?:^|\s)(kg|kilo|kilos|litre|liter|litres|liters|packet|packets|box|boxes|bottle|bottles|darjan|dozen|bori|sack|کلو|لیٹر|درجن|پیکٹ|بوری|بوتل|ڈبہ)(?:\s|$)/i;
+
+/**
+ * Fast-path heuristic parser for stock restocks and stock inquiries.
+ * Ensures zero-latency handling and serves as a reliable safety net.
+ */
+export function parseStockHeuristic(text) {
+  if (!text || typeof text !== 'string') return null;
+  const normalizedDigits = text.replace(/[۰-۹]/g, (d) => URDU_DIGITS_MAP[d] || d);
+  const lower = normalizedDigits.trim().toLowerCase();
+
+  // Exclude full stock list / inventory queries (handled by dedicated menu)
+  if (/^(stock\s*list|inventory|saman|سارا\s*اسٹاک|اسٹاک\s*لسٹ)$/i.test(lower)) {
+    return null;
+  }
+
+  // 1. Check stock inquiry: "rice kitna hai", "check stock sugar", "chini kitni hai", "how much oil left", "stock rice"
+  const isStockCheck = /(kitna\s*(?:hai|bacha|rah\s*gaya)|kitni\s*(?:hai|bachi|rah\s*gayi)|kitne\s*(?:hai|bache|rah\s*gaye)|check\s*stock|stock\s*check|how\s*much.*left|how\s*many.*left|کتنا\s*ہے|کتنی\s*ہے|کتنا\s*بچا|اسٹاک\s*چیک)/i.test(lower) ||
+    /^stock\s+(?!list\b|summary\b|report\b)([a-zA-Z\u0600-\u06FF\s]+)$/i.test(lower) ||
+    /^[a-zA-Z\u0600-\u06FF\s]+\s+stock$/i.test(lower);
+
+  if (isStockCheck) {
+    const cleaned = lower
+      .replace(/(check\s*stock|stock\s*check|stock\s*of|^stock\b|\bstock$|kitna\s*hai|kitni\s*hai|kitne\s*hai|kitna\s*bacha\s*hai|kitni\s*bachi\s*hai|kitne\s*bache\s*hai|kitna\s*bacha|kitni\s*bachi|kitne\s*bache|rah\s*gaya|rah\s*gayi|rah\s*gaye|ka\s*stock|ki\s*stock|how\s*much|how\s*many|left|کتنا\s*ہے|کتنی\s*ہے|کتنا\s*بچا|کا\s*اسٹاک|اسٹاک)/gi, '')
+      .trim();
+    if (cleaned) {
+      return { type: 'check_stock', item: { name: cleaned } };
+    }
+  }
+
+  // 2. Restock / incoming inventory: "maal aya 20 chini", "add 50 rice", "stock update 20 oil", "20 کلو چاول آئے ہیں"
+  const isRestock = /(maal\s*a[y|i]a|a[y|i]a\s*hai|aaye\s*hain|restock|add\s*stock|stock\s*update|stock\s*add|مال\s*آیا|آئے\s*ہیں|اسٹاک\s*میں\s*شامل|نیا\s*مال)/i.test(lower) ||
+                    /^add\s+\d+/i.test(lower) ||
+                    /^(شامل|اضافہ)\b/.test(lower);
+
+  if (isRestock) {
+    let quantity = 1;
+    let price = null;
+    let unit = null;
+
+    const unitMatch = lower.match(UNIT_REGEX);
+    if (unitMatch) {
+      unit = unitMatch[1].trim();
+    }
+
+    const nums = lower.match(/\d+/g);
+    if (nums && nums.length > 0) {
+      quantity = parseInt(nums[0], 10);
+      if (nums.length > 1 && /(price|rate|rs|روپے|قیمت)/i.test(lower)) {
+        price = parseInt(nums[1], 10);
+      }
+    } else {
+      // Look for word-based numbers e.g. "bees", "بیس", "panch", "پانچ"
+      const words = lower.split(/\s+/);
+      for (const w of words) {
+        if (NUMBER_WORDS_MAP[w]) {
+          quantity = NUMBER_WORDS_MAP[w];
+          break;
+        }
+      }
+    }
+
+    const stripped = lower
+      .replace(/(maal\s*a[y|i]a|a[y|i]a\s*hai|aaye\s*hain|restock|add\s*stock|stock\s*update|stock\s*add|add|new|naya|item|مال\s*آیا|آئے\s*ہیں|اسٹاک\s*میں\s*شامل|نیا\s*مال|شامل\s*کرو|شامل|اضافہ|روپے|rs|price|rate|\d+)/gi, ' ')
+      .replace(UNIT_REGEX, ' ')
+      .replace(NUMBER_WORDS_REGEX, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (stripped) {
+      return {
+        type: 'update_stock',
+        item: { name: stripped, quantity, price, unit },
+        action: 'add',
+      };
+    }
+  }
+
+  return null;
+}
+
 /**
  * Returns one of the command-contract shapes. Shared by the
  * typed-text path and (via the agent module) the voice-transcript path, so
@@ -188,7 +298,11 @@ export async function parseIntent(text) {
     return { type: 'unknown', rawText: '' };
   }
 
+  // Check fast-path stock heuristic first
+  const stockHeuristic = parseStockHeuristic(text);
+
   if (!llmConfigured()) {
+    if (stockHeuristic) return stockHeuristic;
     console.warn('No LLM provider key set — falling back to unknown intent');
     return { type: 'unknown', rawText: text };
   }
@@ -197,7 +311,12 @@ export async function parseIntent(text) {
     const raw = await chatCompletion(SYSTEM_PROMPT, text);
     const parsed = extractJson(raw);
 
-    if (parsed && ['log_sale', 'create_workflow', 'greeting', 'generate_report', 'unknown'].includes(parsed.type)) {
+    if (parsed && ['log_sale', 'update_stock', 'check_stock', 'create_workflow', 'greeting', 'generate_report', 'unknown'].includes(parsed.type)) {
+      // Guard: If model misclassified restock speech as a sale, override it
+      if (parsed.type === 'log_sale' && stockHeuristic?.type === 'update_stock') {
+        return stockHeuristic;
+      }
+
       if (parsed.type === 'log_sale') {
         if (parsed.paymentMethod) {
           parsed.paymentMethod = normalizePaymentMethod(parsed.paymentMethod) || parsed.paymentMethod.toLowerCase();
@@ -211,6 +330,29 @@ export async function parseIntent(text) {
           parsed.item.quantity = 1;
         }
       }
+
+      if (parsed.type === 'update_stock') {
+        if (!parsed.item || !parsed.item.name) {
+          if (stockHeuristic?.item?.name) {
+            parsed.item = stockHeuristic.item;
+          } else {
+            parsed.item = { name: text.trim(), quantity: 1 };
+          }
+        }
+        if (!parsed.item.quantity || isNaN(parsed.item.quantity)) {
+          parsed.item.quantity = 1;
+        }
+        parsed.action = parsed.action || 'add';
+      }
+
+      if (parsed.type === 'check_stock') {
+        if (!parsed.item || !parsed.item.name) {
+          if (stockHeuristic?.item?.name) {
+            parsed.item = stockHeuristic.item;
+          }
+        }
+      }
+
       return parsed;
     }
 
@@ -219,13 +361,18 @@ export async function parseIntent(text) {
     console.warn('[qwen.service] chatCompletion failed during parseIntent:', err.message);
   }
 
-  // Safety net heuristic fallbacks: never falsely say 'unknown' to standard greetings or report requests
+  // Safety net heuristic fallbacks: never falsely say 'unknown' to standard greetings, reports, or stock
+  if (stockHeuristic) {
+    return stockHeuristic;
+  }
+
   const lower = text.trim().toLowerCase();
   if (/^(suno|salam|assalam|aoa|hello|hi|hey|bhai|janab|adaab)\b/i.test(lower) || /^(سلام|وعلیکم|ہیلو|سنو)/.test(text.trim())) {
     return { type: 'greeting', rawText: text };
   }
 
-  if (/report|list|stock|summary|hisab|کھاتہ|رپورٹ|اسٹاک/i.test(lower)) {
+  // Only trigger report when explicitly asking for reports or full inventory/summary
+  if (/(report|summary|hisab|کھاتہ|رپورٹ)/i.test(lower) || /^(inventory|stock\s*list|سارا\s*اسٹاک)$/i.test(lower)) {
     const reportType = /sale/i.test(lower) ? 'sales' : /low|short|kam/i.test(lower) ? 'low_stock' : 'inventory';
     return { type: 'generate_report', reportType };
   }

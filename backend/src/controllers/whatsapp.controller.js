@@ -1,8 +1,10 @@
 import Merchant from '../models/Merchant.js';
 import InventoryItem from '../models/InventoryItem.js';
 import ConversationState from '../models/ConversationState.js';
+import Workflow from '../models/Workflow.js';
 
 import { createOrder } from '../crm/order.service.js';
+import { restockItemViaCrm, checkStockViaCrm, getStockListSummary } from '../crm/inventory.service.js';
 import { evaluateMessageWorkflows, createWorkflow } from '../workflows/workflow.service.js';
 import { respond as respondToApproval, findPendingByOrderId } from '../approvals/approval.service.js';
 import { generateLinkCode } from './auth.controller.js';
@@ -26,8 +28,10 @@ import {
   sendDocumentMessage as sendDocumentMessageRaw,
   paginateRows,
 } from '../services/whatsapp.service.js';
-import { spokenPhrases } from '../services/localization.service.js';
+import { spokenPhrases, formatPaymentMethod } from '../services/localization.service.js';
 import {
+  getAllPaymentMethods,
+  isValidPaymentMethod,
   getPaymentMethodDetails,
   normalizePaymentMethod,
   DEFAULT_ACCEPTED_PAYMENT_METHODS,
@@ -386,6 +390,55 @@ async function handleOnboardedMerchant(merchant, message) {
         }, 'voice', 'en');
       }
 
+      // Voice replies buttons
+      if (buttonId === 'set_voice_on') {
+        merchant.voiceReplies = true;
+        await merchant.save();
+        emitDashboardUpdate(merchant._id, { type: 'profile' });
+        return replyToMerchant(merchant, {
+          spoken: merchant.language === 'ur' ? 'وائس جوابات چالو کر دیے گئے ہیں۔' : 'Voice replies have been enabled.',
+          text: merchant.language === 'ur' ? '🔊 وائس جوابات چالو کر دیے گئے ہیں۔' : '🔊 Voice replies enabled.',
+        }, 'voice');
+      }
+      if (buttonId === 'set_voice_off') {
+        merchant.voiceReplies = false;
+        await merchant.save();
+        emitDashboardUpdate(merchant._id, { type: 'profile' });
+        return sendTextMessage(
+          merchant.whatsappNumber,
+          merchant.language === 'ur' ? '🔇 وائس جوابات بند کر دیے گئے ہیں۔ اب تمام جوابات ٹیکسٹ میں ملیں گے۔' : '🔇 Voice replies disabled. All replies will be in text.'
+        );
+      }
+
+      // Quick menu buttons
+      if (buttonId === 'menu_help') {
+        return await sendHelpCommandsMenu(merchant);
+      }
+      if (buttonId === 'menu_stock') {
+        return await sendStockListSummary(merchant);
+      }
+      if (buttonId === 'menu_reports') {
+        return await sendReportPicker(merchant);
+      }
+      if (buttonId === 'menu_settings' || buttonId === 'menu_profile') {
+        return await sendProfileSettings(merchant);
+      }
+      if (buttonId === 'menu_banks') {
+        return await sendPaymentSettings(merchant);
+      }
+
+      // Quick report trigger buttons
+      if (buttonId?.startsWith('report_')) {
+        const reportType = buttonId.replace('report_', '');
+        return await handleReportRequest(merchant, reportType, 'text', merchant.language || 'ur');
+      }
+
+      // Payment method toggle button
+      if (buttonId?.startsWith('toggle_pay_')) {
+        const methodId = buttonId.replace('toggle_pay_', '');
+        return await handleTogglePaymentMethod(merchant, methodId);
+      }
+
       // Fast-path: If user taps ANY payment button (e.g. pay_cash, pay_easypaisa, pay_jazzcash)
       if (buttonId?.startsWith('pay_')) {
         const existingState = await ConversationState.findOne({
@@ -456,8 +509,98 @@ async function handleOnboardedMerchant(merchant, message) {
 async function handleTextMessage(merchant, text) {
   const normalized = text.trim().toLowerCase();
 
+  // 1. Core Guided & Link Commands
   if (/^(order|sale|log)$/i.test(normalized)) return startGuidedOrder(merchant);
   if (normalized === 'link' || normalized === 'code') return sendLinkCodeToMerchant(merchant);
+
+  // 2. Help & Commands Guide
+  if (/^(help|cmds|commands|menu|madad|رہنمائی|مینیو|کمانڈز)$/i.test(normalized)) {
+    return await sendHelpCommandsMenu(merchant);
+  }
+
+  // 3. Stock List & Inventory Summary
+  if (/^(stock\s*list|inventory|saman|سارا\s*اسٹاک|اسٹاک\s*لسٹ)$/i.test(normalized)) {
+    return await sendStockListSummary(merchant);
+  }
+
+  // 4. Reports Menu or Direct Report Request
+  if (/^(report|reports|pdf\s*report|رپورٹ|رپورٹس)$/i.test(normalized)) {
+    return await sendReportPicker(merchant);
+  }
+
+  // 5. Profile & Store Settings
+  if (/^(profile|settings|account|dukaan|دکان|سیٹنگز)$/i.test(normalized)) {
+    return await sendProfileSettings(merchant);
+  }
+
+  // 6. Payment & Banks
+  if (/^(banks|payment\s*methods|ادائیگی|بینک)$/i.test(normalized)) {
+    return await sendPaymentSettings(merchant);
+  }
+
+  // 7. Workflows / Automations List
+  if (/^(workflows|automations|alerts|الرٹس)$/i.test(normalized)) {
+    return await sendWorkflowsList(merchant);
+  }
+
+  // 8. Store Settings Mutators via WhatsApp
+  // Rename shop
+  const renameMatch = text.match(/^(?:set\s*name|rename\s*(?:shop|store)?)\s+(.+)$/i) || text.match(/^دکان\s*کا\s*نام\s+(.+)$/);
+  if (renameMatch) {
+    const newName = renameMatch[1].trim();
+    merchant.businessName = newName;
+    await merchant.save();
+    emitDashboardUpdate(merchant._id, { type: 'profile' });
+    const msg = merchant.language === 'ur'
+      ? `✅ دکان کا نام کامیابی سے *"${newName}"* رکھ دیا گیا ہے۔`
+      : `✅ Store name updated to *"${newName}"*.`;
+    return sendTextMessage(merchant.whatsappNumber, msg);
+  }
+
+  // Set Location
+  const locMatch = text.match(/^(?:set\s*location|change\s*location)\s+(.+)$/i) || text.match(/^مقام\s+(.+)$/);
+  if (locMatch) {
+    const newLoc = locMatch[1].trim();
+    merchant.location = newLoc;
+    await merchant.save();
+    emitDashboardUpdate(merchant._id, { type: 'profile' });
+    const msg = merchant.language === 'ur'
+      ? `✅ دکان کا مقام کامیابی سے *"${newLoc}"* اپڈیٹ ہو گیا ہے۔`
+      : `✅ Store location updated to *"${newLoc}"*.`;
+    return sendTextMessage(merchant.whatsappNumber, msg);
+  }
+
+  // Voice toggle
+  const voiceMatch = text.match(/^voice\s+(on|off)$/i) || text.match(/^وائس\s+(آن|بند|اف)$/i);
+  if (voiceMatch) {
+    const isVoiceOn = /^(on|آن)$/i.test(voiceMatch[1]);
+    merchant.voiceReplies = isVoiceOn;
+    await merchant.save();
+    emitDashboardUpdate(merchant._id, { type: 'profile' });
+    const msg = merchant.language === 'ur'
+      ? (isVoiceOn ? '🔊 وائس جوابات چالو کر دیے گئے ہیں۔' : '🔇 وائس جوابات بند کر دیے گئے ہیں۔')
+      : (isVoiceOn ? '🔊 Voice replies enabled.' : '🔇 Voice replies disabled.');
+    return sendTextMessage(merchant.whatsappNumber, msg);
+  }
+
+  // Enable payment method
+  const enableMatch = text.match(/^(?:enable|add)\s+([a-zA-Z\s-]+)$/i);
+  if (enableMatch) {
+    return await handleTogglePaymentMethod(merchant, enableMatch[1], true);
+  }
+
+  // Disable payment method
+  const disableMatch = text.match(/^(?:disable|remove)\s+([a-zA-Z\s-]+)$/i);
+  if (disableMatch) {
+    return await handleTogglePaymentMethod(merchant, disableMatch[1], false);
+  }
+
+  // Urdu payment method toggle (e.g. "ایزی پیسہ آن", "جاز کیش بند", "سادا پے آن کرو")
+  const urduPayMatch = text.match(/^([a-zA-Z\s\u0600-\u06FF-]+?)\s+(آن|آن\s*کرو|بند|بند\s*کرو)$/i);
+  if (urduPayMatch) {
+    const isEnable = /آن/.test(urduPayMatch[2]);
+    return await handleTogglePaymentMethod(merchant, urduPayMatch[1], isEnable);
+  }
 
   // Language switching commands
   if (/^(urdu|اردو)$/i.test(normalized)) {
@@ -501,7 +644,7 @@ async function handleTextMessage(merchant, text) {
     console.error('parseIntent failed:', err.message);
     return sendTextMessage(
       merchant.whatsappNumber,
-      "I didn't quite catch that — try 'order' to log a sale, or describe an automation you'd like."
+      "I didn't quite catch that — try 'help' to see all commands or 'order' to log a sale."
     );
   }
 }
@@ -543,6 +686,28 @@ async function routeParsedCommand(merchant, intent, source) {
     });
   }
 
+  if (intent.type === 'update_stock') {
+    const phrases = await restockItemViaCrm(merchant, {
+      type: 'update_stock',
+      merchantId: merchant._id,
+      item: intent.item,
+      source,
+      language: effectiveLanguage,
+    });
+    return replyToMerchant(merchant, phrases, source, effectiveLanguage);
+  }
+
+  if (intent.type === 'check_stock') {
+    const phrases = await checkStockViaCrm(merchant, {
+      type: 'check_stock',
+      merchantId: merchant._id,
+      item: intent.item,
+      source,
+      language: effectiveLanguage,
+    });
+    return replyToMerchant(merchant, phrases, source, effectiveLanguage);
+  }
+
   if (intent.type === 'create_workflow') {
     return createWorkflowViaModule(merchant, {
       merchantId: merchant._id,
@@ -562,12 +727,12 @@ async function routeParsedCommand(merchant, intent, source) {
   if (intent.type === 'greeting') {
     const greetingPhrases = effectiveLanguage === 'en'
       ? {
-          spoken: 'Hello! How can I help you today? What sale would you like to record?',
-          text: 'Hello! How can I help? You can speak or type your sale, for example "2 rice cash".',
+          spoken: 'Hello! How can I help you today? You can log a sale, add stock, or type help.',
+          text: 'Hello! How can I help? Speak or type your sale (e.g. "2 rice cash"), add stock (e.g. "add 50 rice"), or type *help* for all commands.',
         }
       : {
-          spoken: 'وعلیکم السلام! فرمائیے، کیا سیل درج کرنی ہے؟',
-          text: 'وعلیکم السلام! فرمائیے، کیا سیل درج کرنی ہے؟ آپ بول کر بھی سیل درج کروا سکتے ہیں، جیسے "دو چاول کیش"۔',
+          spoken: 'وعلیکم السلام! فرمائیے، کیا مدد کروں؟ آپ بول کر سیل درج کر سکتے ہیں، نیا مال شامل کر سکتے ہیں، یا ہیلپ لکھیں۔',
+          text: 'وعلیکم السلام! فرمائیے، کیا مدد کروں؟ آپ بول کر سیل درج کر سکتے ہیں، نیا مال شامل کر سکتے ہیں، یا تمام کمانڈز کے لیے *help* لکھیں۔',
         };
     return replyToMerchant(merchant, greetingPhrases, source, effectiveLanguage);
   }
@@ -1140,4 +1305,304 @@ async function handleClearExpiryReply(merchant, buttonId) {
     console.error('handleClearExpiryReply error:', err.message);
     return sendTextMessage(merchant.whatsappNumber, "Couldn't clear the alert — please try from the dashboard.");
   }
+}
+
+/**
+ * Interactive commands & help guide.
+ * Sends the comprehensive categorized guide, followed by quick action buttons.
+ */
+async function sendHelpCommandsMenu(merchant) {
+  const language = merchant.language || 'ur';
+  const phrases = spokenPhrases.helpCommands(language);
+  await sendTextMessage(merchant.whatsappNumber, phrases.text);
+
+  const buttonPrompt = language === 'ur'
+    ? 'فوری بٹن منتخب کریں یا مزید معلومات دیکھیں:'
+    : 'Choose a quick action below:';
+
+  const buttons = language === 'ur'
+    ? [
+        { id: 'menu_stock', title: '📦 اسٹاک لسٹ' },
+        { id: 'menu_reports', title: '📄 رپورٹس' },
+        { id: 'menu_settings', title: '⚙️ سیٹنگز' },
+      ]
+    : [
+        { id: 'menu_stock', title: '📦 Stock List' },
+        { id: 'menu_reports', title: '📄 PDF Reports' },
+        { id: 'menu_settings', title: '⚙️ Settings' },
+      ];
+
+  return await sendInteractiveButtons(merchant.whatsappNumber, buttonPrompt, buttons);
+}
+
+/**
+ * Summarizes the merchant's current inventory with low-stock warnings.
+ */
+async function sendStockListSummary(merchant) {
+  const summary = await getStockListSummary(merchant);
+  const language = merchant.language || 'ur';
+  const buttons = language === 'ur'
+    ? [
+        { id: 'menu_help', title: '📋 مینیو' },
+        { id: 'menu_reports', title: '📄 رپورٹس' },
+        { id: 'menu_settings', title: '⚙️ سیٹنگز' },
+      ]
+    : [
+        { id: 'menu_help', title: '📋 Menu' },
+        { id: 'menu_reports', title: '📄 PDF Reports' },
+        { id: 'menu_settings', title: '⚙️ Settings' },
+      ];
+
+  if (summary.text.length <= 1000) {
+    const res = await sendInteractiveButtons(merchant.whatsappNumber, summary.text, buttons);
+    if (!res) await sendTextMessage(merchant.whatsappNumber, summary.text);
+  } else {
+    await sendTextMessage(merchant.whatsappNumber, summary.text);
+    await sendInteractiveButtons(
+      merchant.whatsappNumber,
+      language === 'ur' ? 'مزید آپشنز منتخب کریں:' : 'Select an option:',
+      buttons
+    );
+  }
+}
+
+/**
+ * PDF Reports Picker: lets merchant tap to generate Sales, Inventory, or Low Stock reports.
+ */
+async function sendReportPicker(merchant) {
+  const language = merchant.language || 'ur';
+  const bodyText = language === 'ur'
+    ? `📄 *پی ڈی ایف رپورٹس مینیو*\n\nجس رپورٹ کی پی ڈی ایف چاہیے نیچے بٹن دبائیں یا نام لکھ کر بھیجیں:\n• سیلز رپورٹ (*"sales report"*)\n• اسٹاک رپورٹ (*"inventory report"*)\n• کم اسٹاک رپورٹ (*"low stock report"*)\n• ایکسپائری رپورٹ (*"expiring report"*)\n• ٹاپ سیلنگ رپورٹ (*"top selling report"*)`
+    : `📄 *PDF Reports Menu*\n\nTap a button below or type the report name to receive an instant PDF download in WhatsApp:\n• Sales Report (*"sales report"*)\n• Stock Inventory (*"inventory report"*)\n• Low Stock Alert (*"low stock report"*)\n• Expiring Items (*"expiring report"*)\n• Top Selling (*"top selling report"*)`;
+
+  const buttons = language === 'ur'
+    ? [
+        { id: 'report_sales', title: '📊 سیلز رپورٹ' },
+        { id: 'report_inventory', title: '📦 اسٹاک رپورٹ' },
+        { id: 'report_low_stock', title: '⚠️ کم اسٹاک' },
+      ]
+    : [
+        { id: 'report_sales', title: '📊 Sales Report' },
+        { id: 'report_inventory', title: '📦 Inventory' },
+        { id: 'report_low_stock', title: '⚠️ Low Stock' },
+      ];
+
+  const res = await sendInteractiveButtons(merchant.whatsappNumber, bodyText, buttons);
+  if (!res) {
+    await sendTextMessage(merchant.whatsappNumber, bodyText);
+  }
+}
+
+/**
+ * Profile and Store Settings summary with quick toggle action buttons.
+ */
+async function sendProfileSettings(merchant) {
+  const language = merchant.language || 'ur';
+  const accepted = (merchant.acceptedPaymentMethods || []).map((m) => formatPaymentMethod(m, language)).join(', ') || 'Cash';
+  const isVoice = merchant.voiceReplies !== false;
+
+  let text;
+  if (language === 'ur') {
+    text = `⚙️ *دکان اور پروفائل سیٹنگز*\n\n` +
+      `🏪 *دکان کا نام:* ${merchant.businessName || 'مقرر نہیں'}\n` +
+      `📍 *مقام:* ${merchant.location || 'مقرر نہیں'}\n` +
+      `🏷️ *کاروبار کی قسم:* ${merchant.businessType || 'general'}\n` +
+      `🌐 *زبان:* ${merchant.language === 'ur' ? 'اردو (Urdu)' : 'English'}\n` +
+      `🔊 *وائس جوابات:* ${isVoice ? 'چالو (On)' : 'بند (Off)'}\n` +
+      `💳 *منظور شدہ ادائیگی:* ${accepted}\n\n` +
+      `📝 *تبدیل کرنے کا طریقہ:*\n` +
+      `• نام بدلیں: *"set name [نیا نام]"*\n` +
+      `• مقام بدلیں: *"set location [شہر]"*\n` +
+      `• زبان: *"urdu"* یا *"english"*\n` +
+      `• وائس: *"voice on"* یا *"voice off"*\n` +
+      `• بینک: لکھیں *"banks"*`;
+  } else {
+    text = `⚙️ *Store Profile & Settings*\n\n` +
+      `🏪 *Store Name:* ${merchant.businessName || 'Not set'}\n` +
+      `📍 *Location:* ${merchant.location || 'Not set'}\n` +
+      `🏷️ *Category:* ${merchant.businessType || 'general'}\n` +
+      `🌐 *Language:* ${merchant.language === 'ur' ? 'Urdu' : 'English'}\n` +
+      `🔊 *Voice Replies:* ${isVoice ? 'Enabled (On)' : 'Disabled (Off)'}\n` +
+      `💳 *Accepted Payments:* ${accepted}\n\n` +
+      `📝 *Quick Change Commands:*\n` +
+      `• Rename: *"set name [New Name]"*\n` +
+      `• Location: *"set location [City]"*\n` +
+      `• Language: *"urdu"* or *"english"*\n` +
+      `• Voice: *"voice on"* or *"voice off"*\n` +
+      `• Bank channels: Type *"banks"*`;
+  }
+
+  const buttons = [
+    {
+      id: isVoice ? 'set_voice_off' : 'set_voice_on',
+      title: isVoice ? (language === 'ur' ? '🔇 وائس بند' : '🔇 Voice Off') : (language === 'ur' ? '🔊 وائس آن' : '🔊 Voice On'),
+    },
+    {
+      id: language === 'ur' ? 'set_lang_en' : 'set_lang_ur',
+      title: language === 'ur' ? '🇬🇧 English' : '🇵🇰 اردو',
+    },
+    {
+      id: 'menu_banks',
+      title: language === 'ur' ? '💳 پیمنٹ طریقے' : '💳 Payment Methods',
+    },
+  ];
+
+  const res = await sendInteractiveButtons(merchant.whatsappNumber, text, buttons);
+  if (!res) {
+    await sendTextMessage(merchant.whatsappNumber, text);
+  }
+}
+
+/**
+ * Payment Channels & Pakistani Banks list with quick status and toggles.
+ */
+async function sendPaymentSettings(merchant) {
+  const language = merchant.language || 'ur';
+  const all = getAllPaymentMethods();
+  const activeSet = new Set(merchant.acceptedPaymentMethods || ['cash']);
+
+  const popularMethods = all.filter((m) => m.isPopular);
+  const lines = popularMethods.map((m) => {
+    const isActive = activeSet.has(m.id);
+    const status = isActive ? '✅' : '❌';
+    const name = language === 'ur' ? (m.nameUrdu || m.name) : m.name;
+    return `${status} *${name}* (${m.id})`;
+  });
+
+  let text;
+  if (language === 'ur') {
+    text = `💳 *ادائیگی اور بینک کے طریقے (Payment Methods)*\n\n` +
+      `موجودہ فعال اور غیر فعال طریقے:\n\n${lines.join('\n')}\n\n` +
+      `💡 *طریقہ چالو یا بند کرنے کے لیے لکھیں:*\n` +
+      `• *"enable easypaisa"* یا *"disable easypaisa"*\n` +
+      `• *"enable jazzcash"* یا *"disable jazzcash"*\n` +
+      `• *"enable sadapay"* یا *"disable sadapay"*\n` +
+      `• *"enable meezan"* یا *"enable hbl"*`;
+  } else {
+    text = `💳 *Payment Channels & Bank Methods*\n\n` +
+      `Current channel status:\n\n${lines.join('\n')}\n\n` +
+      `💡 *Commands to toggle:*\n` +
+      `• *"enable easypaisa"* or *"disable easypaisa"*\n` +
+      `• *"enable jazzcash"* or *"disable jazzcash"*\n` +
+      `• *"enable sadapay"* or *"disable sadapay"*\n` +
+      `• *"enable meezan"* or *"enable hbl"*`;
+  }
+
+  const buttons = [
+    {
+      id: 'toggle_pay_easypaisa',
+      title: activeSet.has('easypaisa') ? '❌ EasyPaisa' : '✅ EasyPaisa',
+    },
+    {
+      id: 'toggle_pay_jazzcash',
+      title: activeSet.has('jazzcash') ? '❌ JazzCash' : '✅ JazzCash',
+    },
+    {
+      id: 'menu_help',
+      title: language === 'ur' ? '📋 مینیو' : '📋 Menu',
+    },
+  ];
+
+  const res = await sendInteractiveButtons(merchant.whatsappNumber, text, buttons);
+  if (!res) {
+    await sendTextMessage(merchant.whatsappNumber, text);
+  }
+}
+
+/**
+ * Toggles or explicitly sets payment methods (e.g. enable easypaisa, disable jazzcash).
+ */
+async function handleTogglePaymentMethod(merchant, rawMethod, forceState = null) {
+  const language = merchant.language || 'ur';
+  const methodId = normalizePaymentMethod(rawMethod);
+
+  if (!methodId || !isValidPaymentMethod(methodId)) {
+    const errorMsg = language === 'ur'
+      ? `معذرت، ادائیگی کا طریقہ "${rawMethod}" سمجھ نہیں آیا۔ آپ cash, easypaisa, jazzcash, sadapay, nayapay, raast, meezan, hbl وغیرہ استعمال کر سکتے ہیں۔`
+      : `Payment method "${rawMethod}" was not recognized. Available channels include: cash, easypaisa, jazzcash, sadapay, nayapay, raast, meezan, hbl, etc.`;
+    return sendTextMessage(merchant.whatsappNumber, errorMsg);
+  }
+
+  let list = Array.isArray(merchant.acceptedPaymentMethods) ? [...merchant.acceptedPaymentMethods] : ['cash'];
+  const existsIndex = list.indexOf(methodId);
+  let nowEnabled = false;
+
+  if (forceState === true) {
+    if (existsIndex >= 0) {
+      const alreadyMsg = language === 'ur'
+        ? `ℹ️ *${formatPaymentMethod(methodId, language)}* پہلے سے فعال ہے۔`
+        : `ℹ️ *${formatPaymentMethod(methodId, language)}* is already enabled.`;
+      return sendTextMessage(merchant.whatsappNumber, alreadyMsg);
+    }
+    list.push(methodId);
+    nowEnabled = true;
+  } else if (forceState === false) {
+    if (existsIndex < 0) {
+      const alreadyMsg = language === 'ur'
+        ? `ℹ️ *${formatPaymentMethod(methodId, language)}* پہلے سے غیر فعال ہے۔`
+        : `ℹ️ *${formatPaymentMethod(methodId, language)}* is already disabled.`;
+      return sendTextMessage(merchant.whatsappNumber, alreadyMsg);
+    }
+    if (methodId === 'cash' && list.length === 1) {
+      const msg = language === 'ur'
+        ? 'کیش کو بند نہیں کیا جا سکتا کیونکہ یہ واحد طریقہ ہے جو ابھی فعال ہے۔'
+        : 'Cash cannot be disabled when it is your only active payment channel.';
+      return sendTextMessage(merchant.whatsappNumber, msg);
+    }
+    list.splice(existsIndex, 1);
+    nowEnabled = false;
+  } else {
+    // Toggle
+    if (existsIndex >= 0) {
+      if (methodId === 'cash' && list.length === 1) {
+        const msg = language === 'ur'
+          ? 'کیش کو بند نہیں کیا جا سکتا کیونکہ یہ واحد طریقہ ہے جو ابھی فعال ہے۔'
+          : 'Cash cannot be disabled when it is your only active payment channel.';
+        return sendTextMessage(merchant.whatsappNumber, msg);
+      }
+      list.splice(existsIndex, 1);
+      nowEnabled = false;
+    } else {
+      list.push(methodId);
+      nowEnabled = true;
+    }
+  }
+
+  merchant.acceptedPaymentMethods = list;
+  await merchant.save();
+  emitDashboardUpdate(merchant._id, { type: 'profile' });
+
+  const methodName = formatPaymentMethod(methodId, language);
+  const msg = language === 'ur'
+    ? (nowEnabled ? `✅ *${methodName}* کو کامیابی سے چالو کر دیا گیا ہے۔` : `❌ *${methodName}* کو غیر فعال کر دیا گیا ہے۔`)
+    : (nowEnabled ? `✅ *${methodName}* has been enabled successfully.` : `❌ *${methodName}* has been disabled.`);
+
+  return sendTextMessage(merchant.whatsappNumber, msg);
+}
+
+/**
+ * Lists all active workflows and alerts configured for this merchant.
+ */
+async function sendWorkflowsList(merchant) {
+  const language = merchant.language || 'ur';
+  const workflows = await Workflow.find({ merchantId: merchant._id }).sort({ createdAt: -1 });
+
+  if (!workflows || workflows.length === 0) {
+    const text = language === 'ur'
+      ? `⚡ *کوئی آٹومیشن الرٹ موجود نہیں ہے!*\n\nآپ کسی بھی وقت بول کر یا لکھ کر خودکار الرٹ بنا سکتے ہیں:\n• وائس نوٹ: "جب بھی چینی 5 کلو سے کم ہو مجھے الرٹ کرو"\n• ٹیکسٹ: "alert me when rice is below 10"`
+      : `⚡ *No active automations or alerts!*\n\nYou can create alerts anytime by voice or text:\n• "alert me when sugar is below 5"\n• "notify me when milk reaches 0"`;
+    return sendTextMessage(merchant.whatsappNumber, text);
+  }
+
+  const lines = workflows.map((w, idx) => {
+    const status = w.active ? '🟢' : '⚪';
+    const instr = w.rawInstruction || `${w.trigger} trigger`;
+    return `${idx + 1}. ${status} *${instr}*`;
+  });
+
+  const text = language === 'ur'
+    ? `⚡ *فعال آٹومیشن الرٹس (${workflows.length}):*\n\n${lines.join('\n')}\n\n💡 نیا الرٹ بنانے کے لیے میسج بھیجیں: "جب چینی 5 سے کم ہو الرٹ کرو"`
+    : `⚡ *Your Active Automations (${workflows.length}):*\n\n${lines.join('\n')}\n\n💡 To add a new alert, say or type: "alert me when oil is below 5"`;
+
+  return sendTextMessage(merchant.whatsappNumber, text);
 }

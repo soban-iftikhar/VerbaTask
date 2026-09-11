@@ -205,4 +205,45 @@ export const spokenPhrases = {
       text: isApprove ? '✅ Order approved and marked as completed.' : '❌ Order rejected. Stock has been restored.',
     };
   },
+
+  stockUpdated(language = 'ur', { itemName, addedQuantity, totalQuantity, price, unit } = {}) {
+    const unitText = unit ? ` ${unit}` : '';
+    if (language === 'ur') {
+      return {
+        spoken: `اسٹاک اپڈیٹ ہو گیا ہے۔ ${itemName} کے ${addedQuantity}${unitText} شامل کر دیے گئے ہیں۔ اب کل اسٹاک ${totalQuantity} ہے۔`,
+        text: `✅ اسٹاک اپڈیٹ: +${addedQuantity}${unitText} ${itemName} شامل کر دیے گئے۔ اب کل اسٹاک: ${totalQuantity}${price ? ` (قیمت: Rs. ${price})` : ''}۔`,
+      };
+    }
+    return {
+      spoken: `Stock updated. Added ${addedQuantity}${unitText} ${itemName}. Total stock is now ${totalQuantity}.`,
+      text: `✅ Stock updated: +${addedQuantity}${unitText} ${itemName}. Total in stock: ${totalQuantity}${price ? ` (Price: Rs. ${price})` : ''}.`,
+    };
+  },
+
+  stockChecked(language = 'ur', { itemName, quantity, price, unit } = {}) {
+    const unitText = unit ? ` ${unit}` : '';
+    if (language === 'ur') {
+      return {
+        spoken: `${itemName} کا موجودہ اسٹاک ${quantity}${unitText} ہے${price ? `، قیمت ${price} روپے` : ''}۔`,
+        text: `📦 اسٹاک معلومات: *${itemName}*\n• دستیاب مقدار: ${quantity}${unitText}\n• قیمت فی یونٹ: ${price != null ? `Rs. ${price}` : 'مقرر نہیں'}`,
+      };
+    }
+    return {
+      spoken: `Current stock for ${itemName} is ${quantity}${unitText}${price ? ` at ${price} rupees` : ''}.`,
+      text: `📦 Stock Check: *${itemName}*\n• In Stock: ${quantity}${unitText}\n• Price: ${price != null ? `Rs. ${price}` : 'Not set'}`,
+    };
+  },
+
+  helpCommands(language = 'ur') {
+    if (language === 'ur') {
+      return {
+        spoken: `یہ وربا ٹاسک کی مکمل رہنمائی ہے۔ آپ بول کر یا لکھ کر سیل درج کر سکتے ہیں، نیا مال شامل کر سکتے ہیں، رپورٹس منگوا سکتے ہیں، اور دکان کی سیٹنگز بدل سکتے ہیں۔`,
+        text: `📋 *وربا ٹاسک مکمل رہنمائی / Commands Guide*\n\nآپ یہ تمام کام واٹس ایپ پر بول کر یا لکھ کر سکتے ہیں:\n\n🛒 *1. سیل درج کرنا (Sales)*\n• وائس نوٹ: بولیں "دو کلو چینی کیش" یا "5 چاول ایزی پیسہ"\n• لکھیں: "2 rice cash" یا "10 milk jazzcash"\n• گائیڈڈ بٹن: لکھیں *"order"*\n\n📦 *2. انوینٹری اور نیا مال (Stock & Inventory)*\n• نیا مال شامل کریں: "maal aya 20 chini" یا "add 50 rice"\n• اسٹاک چیک کریں: "stock rice" یا "chini kitni hai"\n• کل سامان کی لسٹ: لکھیں *"stock list"* یا *"inventory"*\n\n📄 *3. پی ڈی ایف رپورٹس (PDF Reports)*\n• لکھیں *"report"* (سیلز، انوینٹری، کم اسٹاک یا ایکسپائری رپورٹس)\n\n⚙️ *4. دکان اور سیٹنگز (Store & Settings)*\n• دکان کی معلومات: لکھیں *"profile"* یا *"settings"*\n• دکان کا نام بدلیں: *"set name [نیا نام]"*\n• شہر / مقام بدلیں: *"set location [شہر]"*\n• زبان تبدیل کریں: *"urdu"* یا *"english"*\n• وائس جوابات: *"voice on"* یا *"voice off"*\n\n💳 *5. بینک اور ادائیگی (Payment & Banks)*\n• طریقے دیکھیں: لکھیں *"banks"* یا *"payment methods"*\n• آن / آف کریں: *"enable easypaisa"* یا *"disable jazzcash"*\n\n⚡ *6. آٹومیشن الرٹس (Workflows)*\n• بول کر الرٹ بنائیں: "jab doodh 5 se kam ho alert karo"\n• لسٹ دیکھیں: لکھیں *"workflows"*`,
+      };
+    }
+    return {
+      spoken: `Here is your VerbaTask commands guide. You can log sales, add stock, check inventory, download PDF reports, and manage store settings by speaking or typing.`,
+      text: `📋 *VerbaTask Commands Guide*\n\nYou can manage your entire store by speaking or typing:\n\n🛒 *1. Log Sales*\n• Voice Note: Send audio like "2 kg sugar cash" or "5 rice easypaisa"\n• Text: Type "2 rice cash" or "10 milk jazzcash"\n• Guided Flow: Type *"order"* to pick from stock list\n\n📦 *2. Stock & Inventory*\n• Add Stock / Restock: "add 50 rice", "maal aya 20 chini", "restock 10 oil"\n• Check Stock: "stock rice" or "how much sugar left"\n• View All Stock: Type *"stock list"* or *"inventory"*\n\n📄 *3. Download PDF Reports*\n• Type *"report"* for sales, inventory, low stock, or expiring reports\n\n⚙️ *4. Store & Profile Settings*\n• View Store Info: Type *"profile"* or *"settings"*\n• Change Shop Name: *"set name [New Name]"*\n• Change Location: *"set location [City]"*\n• Switch Language: Type *"urdu"* or *"english"*\n• Voice Replies: Type *"voice on"* or *"voice off"*\n\n💳 *5. Payment & Banks*\n• View Accepted Methods: Type *"banks"* or *"payment methods"*\n• Enable / Disable: *"enable easypaisa"* or *"disable jazzcash"*\n\n⚡ *6. Automations & Alerts*\n• Create Alert: "alert me when cooking oil is below 5"\n• View Active Rules: Type *"workflows"*`,
+    };
+  },
 };
