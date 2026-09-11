@@ -156,3 +156,66 @@ export async function getStockListSummary(merchant) {
     text: `📦 *Current Stock List (${items.length} items):*\n\n${lines.join('\n')}\n\n💡 *Type "report" for a complete downloadable PDF.*`,
   };
 }
+
+/**
+ * Updates or sets the selling price of an inventory item.
+ */
+export async function updateItemPriceViaCrm(merchant, rawItemName, newPrice) {
+  const language = merchant.language || 'ur';
+  const price = Math.max(0, Number(newPrice) || 0);
+
+  // 1. Direct case-insensitive match first
+  let item = await InventoryItem.findOne({
+    merchantId: merchant._id,
+    name: new RegExp(`^${escapeRegex(rawItemName.trim())}$`, 'i'),
+  });
+
+  // 2. Fuzzy / cross-lingual match
+  if (!item) {
+    const ranked = await findSimilarInventoryItems(merchant._id, rawItemName, { limit: 1, minScore: 0.6 });
+    if (ranked.length > 0) {
+      item = ranked[0].item;
+    }
+  }
+
+  if (!item) {
+    const standardizedName = cleanAndStandardizeItemName(rawItemName);
+    item = await InventoryItem.create({
+      merchantId: merchant._id,
+      name: standardizedName,
+      quantity: 0,
+      price,
+    });
+
+    emitDashboardUpdate(merchant._id, {
+      type: 'inventory',
+      action: 'create',
+      itemId: item._id,
+      itemName: item.name,
+      price: item.price,
+    });
+  } else {
+    item.price = price;
+    await item.save();
+
+    emitDashboardUpdate(merchant._id, {
+      type: 'inventory',
+      action: 'update',
+      itemId: item._id,
+      itemName: item.name,
+      price: item.price,
+    });
+  }
+
+  if (language === 'ur') {
+    return {
+      spoken: `${item.name} کی قیمت ${price} روپے مقرر کر دی گئی ہے۔`,
+      text: `✅ قیمت اپڈیٹ: *${item.name}* کی قیمت *Rs. ${price}* مقرر کر دی گئی ہے۔`,
+    };
+  }
+
+  return {
+    spoken: `Price for ${item.name} updated to ${price} rupees.`,
+    text: `✅ Price updated: *${item.name}* price set to *Rs. ${price}*.`,
+  };
+}

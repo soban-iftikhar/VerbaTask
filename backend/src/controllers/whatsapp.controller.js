@@ -4,7 +4,7 @@ import ConversationState from '../models/ConversationState.js';
 import Workflow from '../models/Workflow.js';
 
 import { createOrder } from '../crm/order.service.js';
-import { restockItemViaCrm, checkStockViaCrm, getStockListSummary } from '../crm/inventory.service.js';
+import { restockItemViaCrm, checkStockViaCrm, getStockListSummary, updateItemPriceViaCrm } from '../crm/inventory.service.js';
 import { evaluateMessageWorkflows, createWorkflow } from '../workflows/workflow.service.js';
 import { respond as respondToApproval, findPendingByOrderId } from '../approvals/approval.service.js';
 import { generateLinkCode } from './auth.controller.js';
@@ -568,6 +568,17 @@ async function handleTextMessage(merchant, text) {
       ? `✅ دکان کا مقام کامیابی سے *"${newLoc}"* اپڈیٹ ہو گیا ہے۔`
       : `✅ Store location updated to *"${newLoc}"*.`;
     return sendTextMessage(merchant.whatsappNumber, msg);
+  }
+
+  // Set / Update Item Price (e.g. "set price rice 300", "price chini 160", "rice 250 rs", "چینی کی قیمت 150")
+  const setPriceMatch = text.match(/^(?:set\s*price|price|rate|قیمت|ریٹ)\s+([a-zA-Z\s\u0600-\u06FF-]+?)\s+(?:to|=|is)?\s*(\d+)$/i) ||
+                        text.match(/^([a-zA-Z\s\u0600-\u06FF-]+?)\s+(?:ki\s*price|ka\s*rate|کی\s*قیمت|کا\s*ریٹ)\s+(\d+)$/i) ||
+                        text.match(/^([a-zA-Z\s\u0600-\u06FF-]+?)\s+(\d+)\s*(?:rs|rupees|rupay|روپے)$/i);
+  if (setPriceMatch) {
+    const rawItem = setPriceMatch[1].trim();
+    const newPrice = parseInt(setPriceMatch[2], 10);
+    const result = await updateItemPriceViaCrm(merchant, rawItem, newPrice);
+    return replyToMerchant(merchant, result, 'text');
   }
 
   // Voice toggle

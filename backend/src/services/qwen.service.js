@@ -252,11 +252,24 @@ export function parseStockHeuristic(text) {
       unit = unitMatch[1].trim();
     }
 
+    const explicitPriceMatch = lower.match(/(?:price|rate|rs|rupay|rupees|قیمت|روپے)\s*[:=]?\s*(\d+)/i) ||
+                               lower.match(/(\d+)\s*(?:rs|rupay|rupees|روپے)/i);
+    if (explicitPriceMatch) {
+      price = parseInt(explicitPriceMatch[1], 10);
+    }
+
     const nums = lower.match(/\d+/g);
     if (nums && nums.length > 0) {
-      quantity = parseInt(nums[0], 10);
-      if (nums.length > 1 && /(price|rate|rs|روپے|قیمت)/i.test(lower)) {
+      if (price !== null) {
+        const otherNums = nums.map((n) => parseInt(n, 10)).filter((n) => n !== price);
+        if (otherNums.length > 0) {
+          quantity = otherNums[0];
+        }
+      } else if (nums.length >= 2) {
+        quantity = parseInt(nums[0], 10);
         price = parseInt(nums[1], 10);
+      } else {
+        quantity = parseInt(nums[0], 10);
       }
     } else {
       // Look for word-based numbers e.g. "bees", "بیس", "panch", "پانچ"
@@ -270,7 +283,7 @@ export function parseStockHeuristic(text) {
     }
 
     const stripped = lower
-      .replace(/(maal\s*a[y|i]a|a[y|i]a\s*hai|aaye\s*hain|restock|add\s*stock|stock\s*update|stock\s*add|add|new|naya|item|مال\s*آیا|آئے\s*ہیں|اسٹاک\s*میں\s*شامل|نیا\s*مال|شامل\s*کرو|شامل|اضافہ|روپے|rs|price|rate|\d+)/gi, ' ')
+      .replace(/(maal\s*a[y|i]a|a[y|i]a\s*hai|aaye\s*hain|restock|add\s*stock|stock\s*update|stock\s*add|add|new|naya|item|مال\s*آیا|آئے\s*ہیں|اسٹاک\s*میں\s*شامل|نیا\s*مال|شامل\s*کرو|شامل|اضافہ|روپے|روپیہ|روپئے|rs|rupay|rupees|roopay|pkr|price|rate|\d+)/gi, ' ')
       .replace(UNIT_REGEX, ' ')
       .replace(NUMBER_WORDS_REGEX, ' ')
       .replace(/\s+/g, ' ')

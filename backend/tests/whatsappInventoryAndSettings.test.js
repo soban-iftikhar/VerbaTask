@@ -4,7 +4,7 @@ import { parseStockHeuristic } from '../src/services/qwen.service.js';
 import { spokenPhrases } from '../src/services/localization.service.js';
 import { normalizePaymentMethod } from '../src/constants/paymentMethods.js';
 import InventoryItem from '../src/models/InventoryItem.js';
-import { restockItemViaCrm, checkStockViaCrm, getStockListSummary } from '../src/crm/inventory.service.js';
+import { restockItemViaCrm, checkStockViaCrm, getStockListSummary, updateItemPriceViaCrm } from '../src/crm/inventory.service.js';
 
 describe('WhatsApp Inventory, Stock Queries & Command Guides Tests', () => {
   describe('parseStockHeuristic - Incoming Stock & Restock', () => {
@@ -25,6 +25,24 @@ describe('WhatsApp Inventory, Stock Queries & Command Guides Tests', () => {
       assert.equal(parsed.item.quantity, 50);
       assert.equal(parsed.item.price, 300);
       assert.equal(parsed.action, 'add');
+    });
+
+    test('parses restock with implicit second number as price "add 50 rice 300"', () => {
+      const parsed = parseStockHeuristic('add 50 rice 300');
+      assert.ok(parsed);
+      assert.equal(parsed.type, 'update_stock');
+      assert.equal(parsed.item.name, 'rice');
+      assert.equal(parsed.item.quantity, 50);
+      assert.equal(parsed.item.price, 300);
+    });
+
+    test('parses Roman Urdu restock with rupay "maal aya 20 chini 150 rupay"', () => {
+      const parsed = parseStockHeuristic('maal aya 20 chini 150 rupay');
+      assert.ok(parsed);
+      assert.equal(parsed.type, 'update_stock');
+      assert.equal(parsed.item.name, 'chini');
+      assert.equal(parsed.item.quantity, 20);
+      assert.equal(parsed.item.price, 150);
     });
 
     test('parses Urdu script with unit "20 کلو چاول آئے ہیں"', () => {
@@ -321,6 +339,28 @@ describe('WhatsApp Inventory, Stock Queries & Command Guides Tests', () => {
         assert.ok(result.text.includes('Current Stock List (2 items)'));
       } finally {
         InventoryItem.find = originalFind;
+      }
+    });
+
+    test('updateItemPriceViaCrm updates price on existing item', async () => {
+      const mockMerchant = { _id: '507f191e810c19729de860ea', language: 'ur' };
+      const originalFindOne = InventoryItem.findOne;
+
+      const fakeItem = {
+        _id: 'item555',
+        name: 'Rice',
+        price: 200,
+        save: async () => fakeItem,
+      };
+      InventoryItem.findOne = async () => fakeItem;
+
+      try {
+        const res = await updateItemPriceViaCrm(mockMerchant, 'Rice', 320);
+        assert.equal(fakeItem.price, 320);
+        assert.ok(res.text.includes('Rice'));
+        assert.ok(res.text.includes('320'));
+      } finally {
+        InventoryItem.findOne = originalFindOne;
       }
     });
   });
